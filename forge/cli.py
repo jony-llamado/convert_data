@@ -1,0 +1,1171 @@
+"""Command-line interface for Forge.
+
+Provides a thin wrapper around the Forge API for command-line usage.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+app = typer.Typer(
+    name="forge",
+    help="Forge - Robotics dataset format converter",
+    add_completion=False,
+)
+console = Console()
+
+
+def _resolve_dataset_path(path_str: str) -> Path:
+    """Resolve a dataset path, downloading from HuggingFace Hub if needed.
+
+    Args:
+        path_str: Local path or HuggingFace URL (hf://org/repo).
+
+    Returns:
+        Resolved local path.
+    """
+    from forge.hub import is_hf_url
+
+    if is_hf_url(path_str):
+        from forge.hub import download_dataset, parse_hf_url
+
+        ref = parse_hf_url(path_str)
+        console.print(f"[cyan]Downloading from HuggingFace Hub:[/cyan] {ref.repo_id}")
+
+        with console.status("[bold green]Downloading dataset..."):
+            local_path = download_dataset(path_str)
+
+        console.print(f"[green]Downloaded to:[/green] {local_path}")
+        return local_path
+
+    return Path(path_str)
+
+
+def _quick_inspect_hub(path: str, output: str = "text") -> None:
+    """Quick inspect a HuggingFace Hub dataset without downloading.
+
+    Fetches metadata from Hub API and analyzes file structure.
+    """
+    from forge.hub import parse_hf_url
+
+    try:
+        from huggingface_hub import HfApi, hf_hub_url
+    except ImportError:
+        console.print("[red]Error:[/red] huggingface_hub is required.")
+        console.print("Install with: pip install huggingface_hub")
+        raise typer.Exit(1)
+
+    ref = parse_hf_url(path)
+    api = HfApi()
+
+    with console.status(f"[bold green]Fetching metadata for {ref.repo_id}..."):
+        try:
+            # Get dataset info from Hub API
+            info = api.dataset_info(ref.repo_id, revision=ref.revision)
+            files = list(api.list_repo_files(ref.repo_id, repo_type="dataset", revision=ref.revision))
+        except Exception as e:
+            console.print(f"[red]Error fetching dataset info:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Analyze file structure to detect format
+    format_detected = "unknown"
+    file_stats: dict[str, int] = {}
+
+    for f in files:
+        ext = Path(f).suffix.lower()
+        if ext:
+            file_stats[ext] = file_stats.get(ext, 0) + 1
+
+    # Detect format from files
+    if any(f.endswith(".tfrecord") for f in files):
+        format_detected = "rlds"
+    elif any("parquet" in f for f in files):
+        if any("meta/info.json" in f for f in files):
+            format_detected = "lerobot-v3"
+        else:
+            format_detected = "lerobot-v2"
+    elif any(f.endswith(".zarr") or "/.zarray" in f for f in files):
+        format_detected = "zarr"
+    elif any(f.endswith((".hdf5", ".h5")) for f in files):
+        format_detected = "hdf5"
+    elif any(f.endswith((".bag", ".mcap", ".db3")) for f in files):
+        format_detected = "rosbag"
+
+    # Count episodes/files
+    parquet_files = [f for f in files if f.endswith(".parquet")]
+    hdf5_files = [f for f in files if f.endswith((".hdf5", ".h5"))]
+    tfrecord_files = [f for f in files if f.endswith(".tfrecord")]
+    video_files = [f for f in files if f.endswith((".mp4", ".webm", ".avi"))]
+
+    # Calculate total size
+    total_size = 0
+    if info.siblings:
+        total_size = sum(s.size or 0 for s in info.siblings if s.size)
+
+    if output == "json":
+        import json
+        data = {
+            "repo_id": ref.repo_id,
+            "format": format_detected,
+            "total_files": len(files),
+            "total_size_bytes": total_size,
+            "total_size_mb": round(total_size / 1_000_000, 2),
+            "file_types": file_stats,
+            "parquet_files": len(parquet_files),
+            "hdf5_files": len(hdf5_files),
+            "tfrecord_files": len(tfrecord_files),
+            "video_files": len(video_files),
+            "downloads": info.downloads,
+            "likes": info.likes,
+            "tags": info.tags,
+        }
+        console.print(json.dumps(data, indent=2))
+        return
+
+    # Rich formatted output
+    console.print()
+    console.print(f"[bold]Dataset:[/bold] {ref.repo_id}")
+    console.print(f"[bold]Format:[/bold] {format_detected} [dim](detected from files)[/dim]")
+
+    if total_size > 0:
+        if total_size > 1_000_000_000:
+            size_str = f"{total_size / 1_000_000_000:.2f} GB"
+        else:
+            size_str = f"{total_size / 1_000_000:.2f} MB"
+        console.print(f"[bold]Total size:[/bold] {size_str}")
+
+    console.print(f"[bold]Total files:[/bold] {len(files)}")
+
+    # File breakdown
+    if file_stats:
+        console.print()
+        table = Table(title="File Types")
+        table.add_column("Extension", style="cyan")
+        table.add_column("Count", justify="right")
+        for ext, count in sorted(file_stats.items(), key=lambda x: -x[1]):
+            table.add_row(ext, str(count))
+        console.print(table)
+
+    # Key counts
+    console.print()
+    if parquet_files:
+        console.print(f"[bold]Parquet files:[/bold] {len(parquet_files)}")
+    if hdf5_files:
+        console.print(f"[bold]HDF5 files:[/bold] {len(hdf5_files)}")
+    if tfrecord_files:
+        console.print(f"[bold]TFRecord files:[/bold] {len(tfrecord_files)}")
+    if video_files:
+        console.print(f"[bold]Video files:[/bold] {len(video_files)}")
+
+    # Hub stats
+    console.print()
+    console.print(f"[dim]Downloads: {info.downloads or 0} | Likes: {info.likes or 0}[/dim]")
+
+    if info.tags:
+        console.print(f"[dim]Tags: {', '.join(info.tags[:5])}{'...' if len(info.tags) > 5 else ''}[/dim]")
+
+    console.print()
+    console.print("[yellow]Note:[/yellow] Use without --quick to download and get full schema details")
+
+
+@app.command("inspect")
+def inspect_cmd(
+    path: str = typer.Argument(..., help="Path to dataset (local path or hf://org/repo)"),
+    format: str | None = typer.Option(
+        None, "--format", "-f", help="Format hint (auto-detected if not provided)"
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text, json"),
+    deep: bool = typer.Option(
+        False, "--deep", "-d", help="Deep scan all episodes (slower but more accurate)"
+    ),
+    samples: int = typer.Option(5, "--samples", "-s", help="Number of episodes to sample"),
+    generate_config: Path | None = typer.Option(
+        None, "--generate-config", "-g", help="Generate a YAML config template and save to this path"
+    ),
+    quick: bool = typer.Option(
+        False, "--quick", "-q", help="Quick inspect for Hub datasets (metadata only, no download)"
+    ),
+) -> None:
+    """Inspect a dataset and show its structure.
+
+    Supports both local paths and HuggingFace Hub datasets.
+    Use --generate-config to create a YAML config template based on the detected schema.
+    Use --quick for Hub datasets to see metadata without downloading.
+
+    Examples:
+        forge inspect my_dataset/
+        forge inspect hf://lerobot/pusht
+        forge inspect hf://lerobot/pusht --quick
+        forge inspect my_dataset/ --generate-config config.yaml
+    """
+    from forge.core.exceptions import ForgeError
+    from forge.hub import is_hf_url
+
+    # Quick inspect for Hub datasets (metadata only, no download)
+    if quick and is_hf_url(path):
+        _quick_inspect_hub(path, output)
+        return
+
+    from forge.inspect import InspectionOptions, Inspector
+
+    # Resolve HuggingFace URLs to local paths
+    try:
+        resolved_path = _resolve_dataset_path(path)
+    except Exception as e:
+        console.print(f"[red]Error downloading dataset:[/red] {e}")
+        raise typer.Exit(1)
+
+    options = InspectionOptions(
+        sample_episodes=samples,
+        deep_scan=deep,
+    )
+    inspector = Inspector(options)
+
+    try:
+        info = inspector.inspect(resolved_path, format)
+    except ForgeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if output == "json":
+        # Convert to JSON-serializable dict
+        data = {
+            "path": str(info.path),
+            "format": info.format,
+            "format_version": info.format_version,
+            "num_episodes": info.num_episodes,
+            "total_frames": info.total_frames,
+            "cameras": {
+                name: {
+                    "height": cam.height,
+                    "width": cam.width,
+                    "channels": cam.channels,
+                    "encoding": cam.encoding,
+                }
+                for name, cam in info.cameras.items()
+            },
+            "observation_schema": {
+                name: {
+                    "shape": list(schema.shape),
+                    "dtype": schema.dtype.value,
+                }
+                for name, schema in info.observation_schema.items()
+            },
+            "action_schema": (
+                {
+                    "shape": list(info.action_schema.shape),
+                    "dtype": info.action_schema.dtype.value,
+                }
+                if info.action_schema
+                else None
+            ),
+            "has_timestamps": info.has_timestamps,
+            "has_language": info.has_language,
+            "language_coverage": info.language_coverage,
+            "has_rewards": info.has_rewards,
+            "inferred_fps": info.inferred_fps,
+            "inferred_gripper_index": info.inferred_gripper_index,
+            "missing_required": info.missing_required,
+            "sample_episode_id": info.sample_episode_id,
+            "sample_num_frames": info.sample_num_frames,
+            "sample_language": info.sample_language,
+        }
+        console.print(json.dumps(data, indent=2))
+        return
+
+    # Rich formatted output
+    console.print()
+    console.print(f"[bold]Dataset:[/bold] {info.path}")
+    console.print(
+        f"[bold]Format:[/bold] {info.format}"
+        + (f" (v{info.format_version})" if info.format_version else "")
+    )
+    console.print(f"[bold]Episodes:[/bold] {info.num_episodes}")
+    if info.total_frames:
+        console.print(f"[bold]Total frames:[/bold] {info.total_frames}")
+
+    # Schema table
+    if info.observation_schema:
+        console.print()
+        table = Table(title="Observation Schema")
+        table.add_column("Field", style="cyan")
+        table.add_column("Type")
+        table.add_column("Shape")
+
+        for name, schema in info.observation_schema.items():
+            table.add_row(name, schema.dtype.value, str(schema.shape))
+
+        console.print(table)
+
+    # Action schema
+    if info.action_schema:
+        console.print()
+        console.print(
+            f"[bold]Action:[/bold] {info.action_schema.dtype.value} {info.action_schema.shape}"
+        )
+
+    # Cameras
+    if info.cameras:
+        console.print()
+        console.print("[bold]Cameras:[/bold]")
+        for name, cam in info.cameras.items():
+            console.print(f"  {name}: {cam.width}x{cam.height} ({cam.encoding})")
+
+    # Inferred properties
+    console.print()
+    console.print("[bold]Inferred Properties:[/bold]")
+    console.print(f"  FPS: {info.inferred_fps or '[dim]unknown[/dim]'}")
+    console.print(
+        f"  Gripper index: {info.inferred_gripper_index if info.inferred_gripper_index is not None else '[dim]unknown[/dim]'}"
+    )
+    console.print(f"  Timestamps: {'yes' if info.has_timestamps else 'no'}")
+    console.print(f"  Language: {'yes' if info.has_language else 'no'}")
+    if info.has_language:
+        console.print(f"  Language coverage: {info.language_coverage:.0%}")
+    console.print(f"  Rewards: {'yes' if info.has_rewards else 'no'}")
+
+    # Sample
+    if info.sample_episode_id:
+        console.print()
+        console.print("[bold]Sample Episode:[/bold]")
+        console.print(f"  ID: {info.sample_episode_id}")
+        if info.sample_num_frames:
+            console.print(f"  Frames: {info.sample_num_frames}")
+        if info.sample_language:
+            console.print(f'  Language: "{info.sample_language}"')
+
+    # Missing requirements
+    if info.missing_required:
+        console.print()
+        console.print(
+            f"[yellow]Missing for conversion:[/yellow] {', '.join(info.missing_required)}"
+        )
+        console.print("\n[dim]Provide these values in a config file for conversion.[/dim]")
+    else:
+        console.print()
+        console.print("[green]Ready for conversion[/green]")
+
+    # Generate config template if requested
+    if generate_config:
+        _generate_config_template(info, generate_config)
+
+
+def _generate_config_template(info: "DatasetInfo", output_path: Path) -> None:
+    """Generate a YAML config template based on dataset inspection.
+
+    Args:
+        info: Dataset inspection info.
+        output_path: Path to save the generated config.
+    """
+    lines = [
+        "# Forge conversion configuration",
+        f"# Generated from: {info.path}",
+        f"# Source format: {info.format}",
+        "",
+        "# Target format for conversion",
+        "target_format: lerobot-v3",
+        "",
+    ]
+
+    # Add FPS and robot type
+    if info.inferred_fps:
+        lines.append(f"fps: {info.inferred_fps}")
+    else:
+        lines.append("# fps: 30  # Specify FPS (required if not in source)")
+
+    if info.inferred_robot_type:
+        lines.append(f"robot_type: {info.inferred_robot_type}")
+    else:
+        lines.append("# robot_type: franka  # Specify robot type")
+
+    lines.append("")
+
+    # Camera mappings
+    if info.cameras:
+        lines.append("# Camera name mapping (source → target)")
+        lines.append("# Modify target names as needed for your use case")
+        lines.append("cameras:")
+        for cam_name in info.cameras:
+            # Normalize the camera name for suggestion
+            normalized = cam_name
+            for prefix in ["steps/observation/", "observation.images.", "observation/", "steps/"]:
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):]
+            # Suggest keeping the normalized name, user can change it
+            lines.append(f"  {normalized}: {normalized}")
+        lines.append("")
+
+    # Field mappings - try to identify action and state fields
+    if info.observation_schema:
+        lines.append("# Field mapping (source → target)")
+        lines.append("# Uncomment and modify as needed")
+        lines.append("fields:")
+
+        # Look for action field
+        action_candidates = []
+        state_candidates = []
+        for field_name, schema in info.observation_schema.items():
+            name_lower = field_name.lower()
+            if "action" in name_lower:
+                action_candidates.append(field_name)
+            elif any(kw in name_lower for kw in ["state", "proprio", "joint", "ee_pos", "qpos"]):
+                state_candidates.append(field_name)
+
+        if action_candidates:
+            lines.append(f"  action: {action_candidates[0]}")
+        else:
+            lines.append("  # action: steps/action  # Specify action field path")
+
+        if state_candidates:
+            lines.append(f"  state: {state_candidates[0]}")
+        else:
+            lines.append("  # state: observation/robot_state  # Specify state field path")
+
+        lines.append("")
+
+    # Video settings
+    lines.append("# Video encoding settings (optional)")
+    lines.append("# video:")
+    lines.append("#   codec: h264")
+    lines.append("#   crf: 23  # Quality (lower = better, 18-28 typical)")
+    lines.append("")
+
+    # Behavior settings
+    lines.append("# Behavior settings")
+    lines.append("fail_on_error: false")
+    lines.append("skip_existing: true")
+
+    # Write the file
+    config_content = "\n".join(lines) + "\n"
+    output_path.write_text(config_content)
+
+    console.print()
+    console.print(f"[green]Config template saved to:[/green] {output_path}")
+    console.print("[dim]Edit the file to customize camera/field mappings before conversion.[/dim]")
+
+
+@app.command("convert")
+def convert_cmd(
+    source: str = typer.Argument(..., help="Path to source dataset (local path or hf://org/repo)"),
+    output: Path = typer.Argument(..., help="Path for output dataset"),
+    config_file: Path | None = typer.Option(
+        None, "--config", help="YAML config file for conversion settings"
+    ),
+    target_format: str | None = typer.Option(
+        None, "--format", "-f", help="Target format (default: lerobot-v3)"
+    ),
+    source_format: str | None = typer.Option(
+        None, "--source-format", "-s", help="Source format (auto-detected if not provided)"
+    ),
+    fps: float | None = typer.Option(None, "--fps", help="Override frames per second"),
+    robot_type: str | None = typer.Option(None, "--robot-type", "-r", help="Robot type"),
+    camera: list[str] | None = typer.Option(
+        None, "--camera", "-c", help="Camera name mapping (format: source=target). Can be repeated."
+    ),
+    fail_on_error: bool = typer.Option(
+        False, "--fail-on-error", help="Stop on first error instead of continuing"
+    ),
+    visualize: bool = typer.Option(
+        False, "--visualize", "-v", help="Open visualizer after conversion to compare source and output"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be converted without writing any files"
+    ),
+    workers: int = typer.Option(
+        1, "--workers", "-w", help="Number of parallel workers for episode processing (default: 1)"
+    ),
+) -> None:
+    """Convert a dataset from one format to another.
+
+    Supports both local paths and HuggingFace Hub datasets.
+
+    Example:
+        forge convert ./rlds_dataset ./output --format lerobot-v3 --fps 30
+        forge convert hf://lerobot/pusht ./output --format lerobot-v3
+        forge convert ./data.zarr ./output --format lerobot-v3 --visualize
+        forge convert ./data.zarr ./output -c front_cam=observation.images.front -c side_cam=observation.images.side
+        forge convert ./data.zarr ./output --dry-run  # Preview without writing
+        forge convert ./dataset ./output --config conversion.yaml
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from forge.convert import ConversionConfig, Converter
+    from forge.core.exceptions import ForgeError
+    from forge.formats.registry import FormatRegistry
+
+    # Resolve HuggingFace URLs to local paths
+    try:
+        resolved_source = _resolve_dataset_path(source)
+    except Exception as e:
+        console.print(f"[red]Error downloading dataset:[/red] {e}")
+        raise typer.Exit(1)
+
+    # Load config from YAML file if provided
+    if config_file:
+        if not config_file.exists():
+            console.print(f"[red]Error:[/red] Config file not found: {config_file}")
+            raise typer.Exit(1)
+        try:
+            config = ConversionConfig.from_yaml(config_file)
+            console.print(f"[dim]Loaded config from {config_file}[/dim]")
+        except Exception as e:
+            console.print(f"[red]Error loading config:[/red] {e}")
+            raise typer.Exit(1)
+    else:
+        config = ConversionConfig()
+
+    # CLI arguments override config file settings
+    if target_format:
+        config.target_format = target_format
+    elif not config.target_format:
+        config.target_format = "lerobot-v3"  # Default
+
+    if fps is not None:
+        config.fps = fps
+    if robot_type:
+        config.robot_type = robot_type
+    if fail_on_error:
+        config.fail_on_error = fail_on_error
+    if workers > 1:
+        config.num_workers = workers
+
+    # Parse and merge camera mappings (format: source=target)
+    # CLI camera mappings override config file mappings
+    if camera:
+        for mapping in camera:
+            if "=" not in mapping:
+                console.print(f"[red]Invalid camera mapping '{mapping}'. Use format: source=target[/red]")
+                raise typer.Exit(1)
+            src, tgt = mapping.split("=", 1)
+            config.camera_mapping[src.strip()] = tgt.strip()
+
+    # Dry run mode - just inspect and show what would happen
+    if dry_run:
+        console.print("[cyan]Dry run mode - no files will be written[/cyan]")
+        console.print()
+
+        # Detect source format
+        detected_format = source_format or FormatRegistry.detect_format(resolved_source)
+        if not detected_format:
+            console.print(f"[red]Error:[/red] Could not detect format for {resolved_source}")
+            raise typer.Exit(1)
+
+        # Get reader and inspect
+        reader = FormatRegistry.get_reader(detected_format)
+        info = reader.inspect(resolved_source)
+
+        console.print(f"[bold]Source:[/bold] {source}")
+        console.print(f"  Format: {detected_format}")
+        console.print(f"  Episodes: {info.num_episodes}")
+        console.print(f"  Total frames: {info.total_frames}")
+        console.print(f"  FPS: {config.fps or info.inferred_fps or 'unknown'}")
+
+        if info.cameras:
+            console.print(f"  Cameras: {len(info.cameras)}")
+            for cam_name, cam_info in info.cameras.items():
+                mapped_name = config.get_camera_target(cam_name)
+                if cam_name != mapped_name:
+                    console.print(f"    - {cam_name} → {mapped_name} ({cam_info.width}x{cam_info.height})")
+                else:
+                    console.print(f"    - {cam_name} ({cam_info.width}x{cam_info.height})")
+
+        if info.action_schema:
+            console.print(f"  Action: {info.action_schema.shape}")
+        if info.observation_schema:
+            console.print(f"  Observations: {len(info.observation_schema)} fields")
+
+        # Show field mappings if configured
+        if config.field_mapping:
+            console.print(f"  Field mappings: {len(config.field_mapping)}")
+            for key, mapping in config.field_mapping.items():
+                target = mapping.get_target()
+                if mapping.transform:
+                    console.print(f"    - {mapping.source} → {target} (transform: {mapping.transform})")
+                else:
+                    console.print(f"    - {mapping.source} → {target}")
+
+        console.print()
+        console.print(f"[bold]Output:[/bold] {output}")
+        console.print(f"  Format: {config.target_format}")
+        console.print(f"  Robot type: {config.robot_type or info.inferred_robot_type or 'unknown'}")
+
+        console.print()
+        console.print("[green]Ready to convert.[/green] Run without --dry-run to proceed.")
+        return
+
+    converter = Converter(config)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Starting conversion...", total=None)
+
+        def progress_callback(stage: str, current: int, total: int) -> None:
+            if stage == "inspect":
+                progress.update(task, description="Inspecting source dataset...")
+            elif stage == "episode":
+                progress.update(
+                    task, description=f"Converting episode {current + 1}/{total or '?'}..."
+                )
+            elif stage == "finalize":
+                progress.update(task, description="Writing metadata...")
+
+        try:
+            result = converter.convert(
+                resolved_source,
+                output,
+                target_format=config.target_format,
+                source_format=source_format,
+                progress_callback=progress_callback,
+            )
+        except ForgeError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Show results
+    console.print()
+    if result.success:
+        console.print("[green]Conversion successful![/green]")
+    else:
+        console.print("[yellow]Conversion completed with errors[/yellow]")
+
+    console.print(f"  Source format: {result.source_format}")
+    console.print(f"  Target format: {result.target_format}")
+    console.print(f"  Episodes converted: {result.episodes_converted}")
+    if result.episodes_failed > 0:
+        console.print(f"  Episodes failed: [red]{result.episodes_failed}[/red]")
+    console.print(f"  Total frames: {result.total_frames}")
+    console.print(f"  Output: {result.output_path}")
+
+    if result.errors:
+        console.print()
+        console.print("[yellow]Errors:[/yellow]")
+        for error in result.errors[:10]:  # Show first 10 errors
+            console.print(f"  - {error}")
+        if len(result.errors) > 10:
+            console.print(f"  ... and {len(result.errors) - 10} more errors")
+
+    if not result.success:
+        raise typer.Exit(1)
+
+    # Open visualizer if requested
+    if visualize and result.success:
+        try:
+            from forge.visualize import UnifiedViewer
+
+            console.print()
+            console.print("[cyan]Opening comparison viewer...[/cyan]")
+            console.print(f"  Source: {resolved_source}")
+            console.print(f"  Output: {output}")
+            console.print("[dim]Controls: Episode/Frame sliders, Play/Pause button[/dim]")
+            console.print()
+
+            viewer = UnifiedViewer(resolved_source, output)
+            viewer.show()
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not open visualizer: {e}")
+
+
+@app.command("visualize")
+def visualize_cmd(
+    path: Path = typer.Argument(..., help="Path to dataset"),
+    compare: Path | None = typer.Option(
+        None, "--compare", "-c", help="Second dataset for side-by-side comparison"
+    ),
+    episode: int = typer.Option(0, "--episode", "-e", help="Starting episode index"),
+    unified: bool = typer.Option(
+        True, "--unified/--legacy", help="Use unified viewer (works with any format)"
+    ),
+) -> None:
+    """Visualize a dataset interactively.
+
+    Supports all formats (RLDS, LeRobot v2/v3, Zarr) through the unified viewer.
+    Use --compare to show two datasets side-by-side for comparison.
+
+    Examples:
+        forge visualize dataset.zarr
+        forge visualize converted_lerobot_v3
+        forge visualize original/ --compare converted/
+        forge visualize rlds_dataset/ --compare lerobot_output/
+    """
+    from forge.core.exceptions import ForgeError
+
+    if not path.exists():
+        console.print(f"[red]Error:[/red] Dataset not found: {path}")
+        raise typer.Exit(1)
+
+    if compare and not compare.exists():
+        console.print(f"[red]Error:[/red] Comparison dataset not found: {compare}")
+        raise typer.Exit(1)
+
+    try:
+        if compare:
+            console.print(f"[cyan]Opening comparison viewer:[/cyan]")
+            console.print(f"  Left:  {path}")
+            console.print(f"  Right: {compare}")
+        else:
+            console.print(f"[cyan]Opening viewer for:[/cyan] {path}")
+
+        console.print("[dim]Controls: Episode/Frame sliders, Play/Pause button[/dim]")
+        console.print()
+
+        if unified:
+            from forge.visualize import UnifiedViewer
+
+            viewer = UnifiedViewer(path, compare)
+        else:
+            from forge.visualize import DatasetViewer
+
+            viewer = DatasetViewer(path, compare)
+
+        if episode > 0:
+            viewer.current_episode = min(episode, viewer.backends[0].get_num_episodes() - 1 if unified else viewer.backend.get_num_episodes() - 1)
+        viewer.show()
+
+    except ForgeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("stats")
+def stats_cmd(
+    path: str = typer.Argument(..., help="Path to dataset (local or hf://org/repo)"),
+    plot: bool = typer.Option(False, "--plot", "-p", help="Show distribution plots"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Save stats to JSON file"),
+    sample: int = typer.Option(0, "--sample", "-s", help="Sample N episodes (0 = all)"),
+) -> None:
+    """Compute and display dataset statistics.
+
+    Shows episode length distributions, action/state statistics, and coverage metrics.
+
+    Examples:
+        forge stats dataset/
+        forge stats dataset/ --plot
+        forge stats hf://lerobot/aloha_sim_cube --sample 100
+        forge stats dataset/ --output stats.json
+    """
+    import numpy as np
+
+    from forge.core.exceptions import ForgeError
+    from forge.formats.registry import FormatRegistry
+    from forge.inspect.stats_collector import StatsCollector
+
+    # Resolve path (handles hf:// URLs)
+    resolved_path = _resolve_dataset_path(path)
+
+    if not resolved_path.exists():
+        console.print(f"[red]Error:[/red] Dataset not found: {resolved_path}")
+        raise typer.Exit(1)
+
+    # Detect format and get reader
+    try:
+        format_name = FormatRegistry.detect_format(resolved_path)
+        reader = FormatRegistry.get_reader(format_name)
+    except ForgeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    console.print(f"[cyan]Computing statistics for:[/cyan] {resolved_path}")
+    console.print(f"[dim]Format: {format_name}[/dim]")
+    console.print()
+
+    # Collect statistics
+    collector = StatsCollector()
+    episode_lengths: list[int] = []
+    all_actions: list[np.ndarray] = []
+    all_states: list[np.ndarray] = []
+
+    try:
+        with console.status("[bold green]Analyzing episodes...") as status:
+            for i, episode in enumerate(reader.read_episodes(resolved_path)):
+                if sample > 0 and i >= sample:
+                    break
+
+                collector.collect_episode(episode)
+                episode_lengths.append(collector._episode_stats[-1].num_frames)
+
+                # Collect action/state distributions (sample frames)
+                for j, frame in enumerate(episode.frames()):
+                    if j >= 10:  # Sample first 10 frames per episode
+                        break
+                    if frame.action is not None:
+                        all_actions.append(frame.action)
+                    if frame.state is not None:
+                        all_states.append(frame.state)
+
+                status.update(f"[bold green]Analyzing episodes... ({i + 1} processed)")
+
+    except ForgeError as e:
+        console.print(f"[red]Error reading dataset:[/red] {e}")
+        raise typer.Exit(1)
+
+    # Aggregate stats
+    stats = collector.aggregate()
+
+    # Display statistics
+    console.print("[bold]Dataset Statistics[/bold]")
+    console.print()
+
+    # Episode counts
+    table = Table(title="Episode Statistics", show_header=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="white")
+
+    table.add_row("Total Episodes", str(stats.total_episodes))
+    table.add_row("Total Frames", str(stats.total_frames))
+    table.add_row("Min Frames/Episode", str(stats.min_frames_per_episode))
+    table.add_row("Max Frames/Episode", str(stats.max_frames_per_episode))
+    table.add_row("Mean Frames/Episode", f"{stats.mean_frames_per_episode:.1f}")
+
+    console.print(table)
+    console.print()
+
+    # Coverage metrics
+    coverage_table = Table(title="Coverage Metrics", show_header=False)
+    coverage_table.add_column("Metric", style="cyan")
+    coverage_table.add_column("Value", style="white")
+
+    coverage_table.add_row("Language Instructions", f"{stats.language_coverage * 100:.1f}%")
+    coverage_table.add_row("Success Labels", f"{stats.success_label_coverage * 100:.1f}%")
+    coverage_table.add_row("Rewards", f"{stats.reward_coverage * 100:.1f}%")
+
+    console.print(coverage_table)
+    console.print()
+
+    # Action/State statistics
+    if all_actions:
+        actions_array = np.stack(all_actions)
+        action_table = Table(title="Action Statistics", show_header=True)
+        action_table.add_column("Dim", style="cyan")
+        action_table.add_column("Min", style="white")
+        action_table.add_column("Max", style="white")
+        action_table.add_column("Mean", style="white")
+        action_table.add_column("Std", style="white")
+
+        for dim in range(min(actions_array.shape[1], 14)):  # Show up to 14 dims
+            action_table.add_row(
+                str(dim),
+                f"{actions_array[:, dim].min():.3f}",
+                f"{actions_array[:, dim].max():.3f}",
+                f"{actions_array[:, dim].mean():.3f}",
+                f"{actions_array[:, dim].std():.3f}",
+            )
+
+        if actions_array.shape[1] > 14:
+            action_table.add_row("...", "...", "...", "...", "...")
+
+        console.print(action_table)
+        console.print()
+
+    if all_states:
+        states_array = np.stack(all_states)
+        state_table = Table(title="State Statistics", show_header=True)
+        state_table.add_column("Dim", style="cyan")
+        state_table.add_column("Min", style="white")
+        state_table.add_column("Max", style="white")
+        state_table.add_column("Mean", style="white")
+        state_table.add_column("Std", style="white")
+
+        for dim in range(min(states_array.shape[1], 14)):  # Show up to 14 dims
+            state_table.add_row(
+                str(dim),
+                f"{states_array[:, dim].min():.3f}",
+                f"{states_array[:, dim].max():.3f}",
+                f"{states_array[:, dim].mean():.3f}",
+                f"{states_array[:, dim].std():.3f}",
+            )
+
+        if states_array.shape[1] > 14:
+            state_table.add_row("...", "...", "...", "...", "...")
+
+        console.print(state_table)
+        console.print()
+
+    # Schema consistency
+    if not stats.consistent_action_dim or not stats.consistent_state_dim or not stats.consistent_cameras:
+        console.print("[yellow]Warning: Schema inconsistencies detected[/yellow]")
+        if not stats.consistent_action_dim:
+            console.print("  - Action dimensions vary across episodes")
+        if not stats.consistent_state_dim:
+            console.print("  - State dimensions vary across episodes")
+        if not stats.consistent_cameras:
+            console.print("  - Camera sets vary across episodes")
+        console.print()
+
+    # Save to JSON if requested
+    if output:
+        stats_dict = {
+            "total_episodes": stats.total_episodes,
+            "total_frames": stats.total_frames,
+            "min_frames_per_episode": stats.min_frames_per_episode,
+            "max_frames_per_episode": stats.max_frames_per_episode,
+            "mean_frames_per_episode": stats.mean_frames_per_episode,
+            "language_coverage": stats.language_coverage,
+            "success_label_coverage": stats.success_label_coverage,
+            "reward_coverage": stats.reward_coverage,
+            "consistent_action_dim": stats.consistent_action_dim,
+            "consistent_state_dim": stats.consistent_state_dim,
+            "consistent_cameras": stats.consistent_cameras,
+        }
+
+        if all_actions:
+            actions_array = np.stack(all_actions)
+            stats_dict["action_stats"] = {
+                "shape": list(actions_array.shape),
+                "min": actions_array.min(axis=0).tolist(),
+                "max": actions_array.max(axis=0).tolist(),
+                "mean": actions_array.mean(axis=0).tolist(),
+                "std": actions_array.std(axis=0).tolist(),
+            }
+
+        if all_states:
+            states_array = np.stack(all_states)
+            stats_dict["state_stats"] = {
+                "shape": list(states_array.shape),
+                "min": states_array.min(axis=0).tolist(),
+                "max": states_array.max(axis=0).tolist(),
+                "mean": states_array.mean(axis=0).tolist(),
+                "std": states_array.std(axis=0).tolist(),
+            }
+
+        with open(output, "w") as f:
+            json.dump(stats_dict, f, indent=2)
+        console.print(f"[green]Stats saved to:[/green] {output}")
+
+    # Plot if requested
+    if plot:
+        try:
+            import matplotlib.pyplot as plt
+
+            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+            # Episode length histogram
+            axes[0, 0].hist(episode_lengths, bins=30, edgecolor="black", alpha=0.7)
+            axes[0, 0].set_xlabel("Episode Length (frames)")
+            axes[0, 0].set_ylabel("Count")
+            axes[0, 0].set_title("Episode Length Distribution")
+            axes[0, 0].axvline(
+                stats.mean_frames_per_episode, color="red", linestyle="--", label=f"Mean: {stats.mean_frames_per_episode:.1f}"
+            )
+            axes[0, 0].legend()
+
+            # Action distribution (box plot)
+            if all_actions:
+                actions_array = np.stack(all_actions)
+                num_dims = min(actions_array.shape[1], 14)
+                axes[0, 1].boxplot([actions_array[:, i] for i in range(num_dims)])
+                axes[0, 1].set_xlabel("Action Dimension")
+                axes[0, 1].set_ylabel("Value")
+                axes[0, 1].set_title("Action Distribution by Dimension")
+            else:
+                axes[0, 1].text(0.5, 0.5, "No action data", ha="center", va="center")
+                axes[0, 1].set_title("Action Distribution")
+
+            # State distribution (box plot)
+            if all_states:
+                states_array = np.stack(all_states)
+                num_dims = min(states_array.shape[1], 14)
+                axes[1, 0].boxplot([states_array[:, i] for i in range(num_dims)])
+                axes[1, 0].set_xlabel("State Dimension")
+                axes[1, 0].set_ylabel("Value")
+                axes[1, 0].set_title("State Distribution by Dimension")
+            else:
+                axes[1, 0].text(0.5, 0.5, "No state data", ha="center", va="center")
+                axes[1, 0].set_title("State Distribution")
+
+            # Coverage bar chart
+            coverages = [
+                ("Language", stats.language_coverage),
+                ("Success", stats.success_label_coverage),
+                ("Rewards", stats.reward_coverage),
+            ]
+            axes[1, 1].bar(
+                [c[0] for c in coverages], [c[1] * 100 for c in coverages], color=["blue", "green", "orange"], alpha=0.7
+            )
+            axes[1, 1].set_ylabel("Coverage (%)")
+            axes[1, 1].set_title("Data Coverage")
+            axes[1, 1].set_ylim(0, 105)
+
+            plt.tight_layout()
+            plt.show()
+
+        except ImportError:
+            console.print("[yellow]Warning:[/yellow] matplotlib not installed. Install with: pip install matplotlib")
+
+
+@app.command("formats")
+def formats_cmd() -> None:
+    """List supported formats."""
+    from forge.formats import FormatRegistry
+
+    # Formats that support visualization (any format with a reader works via unified viewer)
+    visualize_formats = {"lerobot-v3", "zarr", "rlds", "hdf5"}
+
+    table = Table(title="Supported Formats")
+    table.add_column("Format", style="cyan")
+    table.add_column("Read", justify="center")
+    table.add_column("Write", justify="center")
+    table.add_column("Visualize", justify="center")
+
+    for name, caps in FormatRegistry.list_formats().items():
+        read = "[green]✓[/green]" if caps["can_read"] else "[dim]-[/dim]"
+        write = "[green]✓[/green]" if caps["can_write"] else "[dim]-[/dim]"
+        viz = "[green]✓[/green]" if name in visualize_formats else "[dim]-[/dim]"
+        table.add_row(name, read, write, viz)
+
+    console.print()
+    console.print(table)
+
+
+@app.command("hub")
+def hub_cmd(
+    query: str = typer.Argument(
+        None, help="Search query (e.g., 'robot manipulation', 'lerobot', 'pusht')"
+    ),
+    author: str | None = typer.Option(
+        None, "--author", "-a", help="Filter by author/organization (e.g., 'lerobot', 'openvla')"
+    ),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum number of results"),
+    download: str | None = typer.Option(
+        None, "--download", "-d", help="Download a specific dataset by repo_id (e.g., 'lerobot/pusht')"
+    ),
+) -> None:
+    """Search and download datasets from HuggingFace Hub.
+
+    Examples:
+        forge hub                              # List popular robotics datasets
+        forge hub "robot manipulation"         # Search for datasets
+        forge hub --author lerobot             # List all LeRobot datasets
+        forge hub --download lerobot/pusht     # Download a specific dataset
+    """
+    try:
+        from huggingface_hub import HfApi, list_datasets
+    except ImportError:
+        console.print("[red]Error:[/red] huggingface_hub is required for this command.")
+        console.print("Install with: pip install huggingface_hub")
+        raise typer.Exit(1)
+
+    # Handle download mode
+    if download:
+        from forge.hub import download_dataset
+
+        console.print(f"[cyan]Downloading dataset:[/cyan] {download}")
+        with console.status("[bold green]Downloading..."):
+            try:
+                local_path = download_dataset(download)
+                console.print(f"[green]Downloaded to:[/green] {local_path}")
+                console.print()
+                console.print("To inspect this dataset:")
+                console.print(f"  forge inspect {local_path}")
+                console.print()
+                console.print("Or use the hf:// URL directly:")
+                console.print(f"  forge inspect hf://{download}")
+            except Exception as e:
+                console.print(f"[red]Error downloading:[/red] {e}")
+                raise typer.Exit(1)
+        return
+
+    # Search mode
+    api = HfApi()
+
+    # Build search parameters
+    search_params = {
+        "limit": limit,
+        "sort": "downloads",
+        "direction": -1,
+    }
+
+    # Default to robotics-related search if no query
+    if not query and not author:
+        # Show popular robotics datasets
+        query = "robot"
+
+    if query:
+        search_params["search"] = query
+    if author:
+        search_params["author"] = author
+
+    console.print(f"[cyan]Searching HuggingFace Hub...[/cyan]")
+    if query:
+        console.print(f"  Query: {query}")
+    if author:
+        console.print(f"  Author: {author}")
+    console.print()
+
+    try:
+        datasets = list(list_datasets(**search_params))
+    except Exception as e:
+        console.print(f"[red]Error searching:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not datasets:
+        console.print("[yellow]No datasets found matching your criteria.[/yellow]")
+        return
+
+    # Display results
+    table = Table(title=f"HuggingFace Datasets ({len(datasets)} results)")
+    table.add_column("Repository", style="cyan", no_wrap=True)
+    table.add_column("Downloads", justify="right")
+    table.add_column("Updated", justify="right")
+    table.add_column("Tags", max_width=40)
+
+    for ds in datasets:
+        # Format downloads
+        downloads = ds.downloads if hasattr(ds, 'downloads') else 0
+        if downloads >= 1_000_000:
+            dl_str = f"{downloads / 1_000_000:.1f}M"
+        elif downloads >= 1_000:
+            dl_str = f"{downloads / 1_000:.1f}K"
+        else:
+            dl_str = str(downloads)
+
+        # Format date
+        updated = ds.last_modified if hasattr(ds, 'last_modified') else None
+        date_str = updated.strftime("%Y-%m-%d") if updated else "-"
+
+        # Get relevant tags
+        tags = ds.tags if hasattr(ds, 'tags') else []
+        # Filter to interesting tags
+        interesting_tags = [t for t in tags if not t.startswith(('license:', 'size_categories:'))]
+        tags_str = ", ".join(interesting_tags[:3]) if interesting_tags else "-"
+
+        table.add_row(ds.id, dl_str, date_str, tags_str)
+
+    console.print(table)
+    console.print()
+    console.print("[dim]To inspect a dataset:[/dim]")
+    console.print("  forge inspect hf://<repo_id>")
+    console.print()
+    console.print("[dim]To download a dataset:[/dim]")
+    console.print("  forge hub --download <repo_id>")
+
+
+@app.command("version")
+def version_cmd() -> None:
+    """Show Forge version."""
+    from forge import __version__
+
+    console.print(f"Forge v{__version__}")
+
+
+@app.callback()
+def main() -> None:
+    """Forge - The normalization layer for robotics data.
+
+    Convert between RLDS, LeRobot, Zarr, and other robotics dataset formats.
+    """
+    pass
+
+
+if __name__ == "__main__":
+    app()

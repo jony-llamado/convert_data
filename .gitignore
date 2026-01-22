@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Linting
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Conversion outputs (test artifacts)
+test_*/
+!tests/
+
+# Large sample data and conversions
+# Keep sample_data/ for examples, but ignore large downloads
+sample_data/**/*.tfrecord*
+sample_data/**/*.parquet
+sample_data/**/*.mp4
+sample_data/**/*.hdf5
+sample_data/**/*.h5
+sample_data/**/*.bag
+sample_data/**/*.mcap
+sample_data/**/*.db3
+
+# Conversion outputs directory
+conversions/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Internal planning docs
+PROJECT_PLAN.md
+
+# HuggingFace cache (user-specific)
+# ~/.cache/forge/ is outside repo, but just in case
+.cache/
