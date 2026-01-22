@@ -10,10 +10,14 @@ Convert between robotics dataset formats with one command.
 | HDF5 | ✓ | - | robomimic, ACT/ALOHA |
 | Rosbag | ✓ | - | ROS1 .bag, ROS2 MCAP |
 
+See [docs/model_formats.md](docs/model_formats.md) for which models (Octo, OpenVLA, ACT, Diffusion Policy, etc.) use which format.
+
 ## Quick Start
 
 ```bash
-pip install forge-robotics[all]
+git clone https://github.com/arpitg1304/forge.git
+cd forge
+pip install -e ".[all]"
 
 # See what's in a dataset
 forge inspect /path/to/dataset
@@ -27,25 +31,6 @@ Works with HuggingFace Hub too:
 ```bash
 forge inspect hf://lerobot/pusht
 forge convert hf://lerobot/pusht ./output --format lerobot-v3
-```
-
-## Installation
-
-```bash
-# Full install (all formats)
-pip install forge-robotics[all]
-
-# Minimal install (specific formats only)
-pip install forge-robotics[lerobot]    # LeRobot + Zarr
-pip install forge-robotics[rlds]       # RLDS/TensorFlow
-pip install forge-robotics[ros]        # Rosbag support
-```
-
-Or from source:
-
-```bash
-git clone https://github.com/your-org/forge.git
-cd forge && pip install -e ".[all]"
 ```
 
 ## Python API
@@ -73,6 +58,7 @@ See [docs/cli.md](docs/cli.md) for the full command reference including:
 - `forge convert` - Format conversion with camera mapping
 - `forge visualize` - Interactive dataset viewer
 - `forge stats` - Compute dataset statistics
+- `forge export-video` - Extract camera videos as MP4
 - `forge hub` - Search and download from HuggingFace
 
 ## Configuration

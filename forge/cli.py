@@ -1003,6 +1003,218 @@ def stats_cmd(
             console.print("[yellow]Warning:[/yellow] matplotlib not installed. Install with: pip install matplotlib")
 
 
+@app.command("export-video")
+def export_video_cmd(
+    path: str = typer.Argument(..., help="Path to dataset (local or hf://org/repo)"),
+    output: Path = typer.Option(None, "--output", "-o", help="Output path (file or directory)"),
+    episode: int | None = typer.Option(None, "--episode", "-e", help="Episode index to export (default: 0)"),
+    camera: str | None = typer.Option(None, "--camera", "-c", help="Camera name to export (default: all cameras)"),
+    all_episodes: bool = typer.Option(False, "--all", "-a", help="Export all episodes"),
+    fps: int | None = typer.Option(None, "--fps", "-f", help="Override FPS (default: from dataset)"),
+    grid: bool = typer.Option(False, "--grid", "-g", help="Combine all cameras into a grid layout"),
+) -> None:
+    """Export videos from dataset cameras.
+
+    Extract camera feeds from any supported format and save as MP4 files.
+
+    Examples:
+        forge export-video dataset/ -o demo.mp4                    # First episode, all cameras grid
+        forge export-video dataset/ -e 5 -o episode5.mp4           # Specific episode
+        forge export-video dataset/ -c wrist_cam -o wrist.mp4      # Specific camera
+        forge export-video dataset/ --all -o ./videos/             # All episodes to directory
+        forge export-video hf://lerobot/pusht -o pusht_demo.mp4    # From HuggingFace
+    """
+    import numpy as np
+
+    from forge.core.exceptions import ForgeError
+    from forge.formats.registry import FormatRegistry
+    from forge.video.encoder import VideoEncoder, VideoEncoderConfig
+
+    # Resolve path (handles hf:// URLs)
+    resolved_path = _resolve_dataset_path(path)
+
+    if not resolved_path.exists():
+        console.print(f"[red]Error:[/red] Dataset not found: {resolved_path}")
+        raise typer.Exit(1)
+
+    # Detect format and get reader
+    try:
+        format_name = FormatRegistry.detect_format(resolved_path)
+        reader = FormatRegistry.get_reader(format_name)
+    except ForgeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    # Inspect to get metadata
+    info = reader.inspect(resolved_path)
+
+    # Determine FPS
+    video_fps = fps or info.inferred_fps or 30
+    console.print(f"[cyan]Exporting video from:[/cyan] {resolved_path}")
+    console.print(f"[dim]Format: {format_name}, FPS: {video_fps}[/dim]")
+
+    # Determine which episodes to export
+    if all_episodes:
+        episode_indices = list(range(info.num_episodes or 1))
+    else:
+        episode_indices = [episode if episode is not None else 0]
+
+    # Determine output path
+    if output is None:
+        output = Path("./output.mp4") if len(episode_indices) == 1 else Path("./videos")
+
+    # If exporting multiple episodes, output must be a directory
+    if len(episode_indices) > 1:
+        output.mkdir(parents=True, exist_ok=True)
+
+    # Create encoder
+    encoder = VideoEncoder(VideoEncoderConfig(codec="libx264", crf=23, preset="medium"))
+
+    # Load all episodes into a list for indexed access
+    # (streaming would be more memory-efficient for large datasets)
+    episodes_list: list = []
+    try:
+        with console.status("[bold green]Loading episode index..."):
+            for ep in reader.read_episodes(resolved_path):
+                episodes_list.append(ep)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Could not read episodes: {e}")
+        raise typer.Exit(1)
+
+    if not episodes_list:
+        console.print("[red]Error:[/red] No episodes found in dataset")
+        raise typer.Exit(1)
+
+    # Process episodes
+    for ep_idx in episode_indices:
+        console.print(f"\n[bold]Episode {ep_idx}[/bold]")
+
+        if ep_idx >= len(episodes_list):
+            console.print(f"[yellow]Warning:[/yellow] Episode {ep_idx} not found (dataset has {len(episodes_list)} episodes)")
+            continue
+
+        ep = episodes_list[ep_idx]
+
+        # Collect frames
+        frames_by_camera: dict[str, list[np.ndarray]] = {}
+        frame_count = 0
+
+        with console.status(f"[bold green]Loading frames...") as status:
+            for frame in ep.frames():
+                frame_count += 1
+                for cam_name, lazy_img in frame.images.items():
+                    # Filter by camera if specified
+                    if camera and cam_name != camera:
+                        continue
+                    if cam_name not in frames_by_camera:
+                        frames_by_camera[cam_name] = []
+                    frames_by_camera[cam_name].append(lazy_img.load())
+                status.update(f"[bold green]Loading frames... ({frame_count})")
+
+        if not frames_by_camera:
+            console.print(f"[yellow]No camera data found for episode {ep_idx}[/yellow]")
+            continue
+
+        console.print(f"  Frames: {frame_count}")
+        console.print(f"  Cameras: {', '.join(frames_by_camera.keys())}")
+
+        # Determine output file path
+        if len(episode_indices) == 1:
+            out_path = output if output.suffix == ".mp4" else output / "output.mp4"
+        else:
+            out_path = output / f"episode_{ep_idx:05d}.mp4"
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if grid and len(frames_by_camera) > 1:
+            # Combine cameras into grid
+            _export_grid_video(frames_by_camera, out_path, video_fps, encoder, console)
+        elif camera:
+            # Export single camera
+            if camera not in frames_by_camera:
+                console.print(f"[red]Error:[/red] Camera '{camera}' not found. Available: {list(frames_by_camera.keys())}")
+                raise typer.Exit(1)
+            frames = frames_by_camera[camera]
+            h, w = frames[0].shape[:2]
+            encoder.encode_from_arrays(iter(frames), out_path, fps=video_fps, width=w, height=h)
+            console.print(f"  [green]Saved:[/green] {out_path}")
+        else:
+            # Export each camera separately or as grid
+            if len(frames_by_camera) == 1:
+                cam_name = list(frames_by_camera.keys())[0]
+                frames = frames_by_camera[cam_name]
+                h, w = frames[0].shape[:2]
+                encoder.encode_from_arrays(iter(frames), out_path, fps=video_fps, width=w, height=h)
+                console.print(f"  [green]Saved:[/green] {out_path} ({cam_name})")
+            else:
+                # Multiple cameras - export as grid by default
+                _export_grid_video(frames_by_camera, out_path, video_fps, encoder, console)
+
+    console.print()
+    console.print("[green]Export complete![/green]")
+
+
+def _export_grid_video(
+    frames_by_camera: dict[str, list],
+    output_path: Path,
+    fps: float,
+    encoder: "VideoEncoder",
+    console: Console,
+) -> None:
+    """Export multiple cameras as a grid video.
+
+    Args:
+        frames_by_camera: Dict mapping camera names to frame lists.
+        output_path: Output video path.
+        fps: Frames per second.
+        encoder: VideoEncoder instance.
+        console: Rich console for output.
+    """
+    import math
+
+    import numpy as np
+
+    camera_names = list(frames_by_camera.keys())
+    num_cameras = len(camera_names)
+    num_frames = min(len(frames) for frames in frames_by_camera.values())
+
+    # Calculate grid dimensions
+    cols = math.ceil(math.sqrt(num_cameras))
+    rows = math.ceil(num_cameras / cols)
+
+    # Get frame dimensions (assume all cameras have same size, resize if not)
+    sample_frame = frames_by_camera[camera_names[0]][0]
+    cell_h, cell_w = sample_frame.shape[:2]
+
+    # Create grid frames
+    grid_h = rows * cell_h
+    grid_w = cols * cell_w
+
+    def generate_grid_frames():
+        for frame_idx in range(num_frames):
+            grid = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+
+            for cam_idx, cam_name in enumerate(camera_names):
+                row = cam_idx // cols
+                col = cam_idx % cols
+                y_start = row * cell_h
+                x_start = col * cell_w
+
+                frame = frames_by_camera[cam_name][frame_idx]
+
+                # Resize if needed
+                if frame.shape[:2] != (cell_h, cell_w):
+                    import cv2
+                    frame = cv2.resize(frame, (cell_w, cell_h))
+
+                grid[y_start:y_start + cell_h, x_start:x_start + cell_w] = frame
+
+            yield grid
+
+    encoder.encode_from_arrays(generate_grid_frames(), output_path, fps=fps, width=grid_w, height=grid_h)
+    console.print(f"  [green]Saved:[/green] {output_path} ({cols}x{rows} grid: {', '.join(camera_names)})")
+
+
 @app.command("formats")
 def formats_cmd() -> None:
     """List supported formats."""

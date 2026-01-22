@@ -114,6 +114,42 @@ forge stats /path/to/dataset --sample 100
 
 ---
 
+## forge export-video
+
+Export camera videos from any dataset format.
+
+```bash
+# Export first episode (all cameras as grid)
+forge export-video /path/to/dataset -o demo.mp4
+
+# Export specific episode
+forge export-video /path/to/dataset -e 5 -o episode5.mp4
+
+# Export specific camera only
+forge export-video /path/to/dataset -c wrist_cam -o wrist.mp4
+
+# Export all episodes to a directory
+forge export-video /path/to/dataset --all -o ./videos/
+
+# From HuggingFace Hub
+forge export-video hf://lerobot/pusht -o pusht_demo.mp4
+
+# Override FPS
+forge export-video /path/to/dataset -o demo.mp4 --fps 30
+
+# Force grid layout for multiple cameras
+forge export-video /path/to/dataset -o demo.mp4 --grid
+```
+
+**Options:**
+- `-e, --episode`: Episode index (default: 0)
+- `-c, --camera`: Export only this camera
+- `-a, --all`: Export all episodes
+- `-f, --fps`: Override frames per second
+- `-g, --grid`: Combine cameras into grid layout
+
+---
+
 ## forge hub
 
 Search and download datasets from HuggingFace Hub.
