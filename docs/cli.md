@@ -1,0 +1,224 @@
+# CLI Reference
+
+Complete reference for all Forge commands.
+
+## forge inspect
+
+Analyze a dataset's structure and schema.
+
+```bash
+# Basic inspection
+forge inspect /path/to/dataset
+
+# Inspect from HuggingFace Hub
+forge inspect hf://lerobot/pusht
+
+# Quick inspect (metadata only, no download)
+forge inspect hf://lerobot/pusht --quick
+
+# Generate a conversion config template
+forge inspect /path/to/dataset --generate-config config.yaml
+```
+
+**Output includes:**
+- Detected format
+- Episode and frame counts
+- Camera names and resolutions
+- State/action dimensions
+- Language instruction samples
+
+---
+
+## forge convert
+
+Convert datasets between formats.
+
+```bash
+# Basic conversion
+forge convert /path/to/input /path/to/output --format lerobot-v3
+
+# From HuggingFace Hub
+forge convert hf://lerobot/pusht ./output --format lerobot-v3
+
+# With camera name mapping
+forge convert input/ output/ --format lerobot-v3 --camera wrist_cam=img
+
+# Multiple camera mappings
+forge convert input/ output/ --format lerobot-v3 \
+    --camera agentview=front \
+    --camera eye_in_hand=wrist
+
+# Parallel processing (faster on multi-core systems)
+forge convert input/ output/ --format lerobot-v3 --workers 4
+
+# Using a config file
+forge convert input/ output/ --config config.yaml
+
+# Dry run (preview without writing)
+forge convert input/ output/ --format lerobot-v3 --dry-run
+```
+
+**Target formats:**
+- `lerobot-v3` - LeRobot v3 (recommended for HuggingFace)
+- `lerobot-v2` - LeRobot v2
+- `rlds` - RLDS/TensorFlow Datasets
+- `zarr` - Zarr format
+
+---
+
+## forge visualize
+
+Interactive dataset viewer.
+
+```bash
+# View a dataset
+forge visualize /path/to/dataset
+
+# Compare two datasets side by side
+forge visualize /path/to/original --compare /path/to/converted
+
+# Specify starting episode
+forge visualize /path/to/dataset --episode 5
+```
+
+**Viewer controls:**
+- Arrow keys: Navigate frames
+- Page Up/Down: Navigate episodes
+- Space: Play/pause
+- Q: Quit
+
+---
+
+## forge stats
+
+Compute dataset statistics.
+
+```bash
+# Basic statistics
+forge stats /path/to/dataset
+
+# With distribution plots (requires matplotlib)
+forge stats /path/to/dataset --plot
+
+# Export to JSON
+forge stats /path/to/dataset --output stats.json
+
+# Sample subset of episodes (faster)
+forge stats /path/to/dataset --sample 100
+```
+
+**Statistics include:**
+- Episode counts (total, min/max/mean frames)
+- Coverage metrics (language, success labels, rewards)
+- Action/state distributions (min, max, mean, std per dimension)
+
+---
+
+## forge hub
+
+Search and download datasets from HuggingFace Hub.
+
+```bash
+# List popular robotics datasets
+forge hub
+
+# Search by query
+forge hub "robot manipulation"
+forge hub "droid"
+
+# Filter by author/organization
+forge hub --author lerobot
+forge hub --author berkeley-humanoid
+
+# Download a dataset
+forge hub --download lerobot/pusht
+
+# Download to specific location
+forge hub --download lerobot/pusht --output ./datasets/
+```
+
+Downloaded datasets are cached in `~/.cache/forge/datasets/`.
+
+---
+
+## forge formats
+
+List supported formats and their capabilities.
+
+```bash
+forge formats
+```
+
+Shows read/write/visualize support for each format.
+
+---
+
+## forge version
+
+Show version information.
+
+```bash
+forge version
+```
+
+---
+
+## Global Options
+
+These options work with all commands:
+
+```bash
+# Verbose output
+forge --verbose inspect /path/to/dataset
+
+# Quiet mode (errors only)
+forge --quiet convert input/ output/ --format lerobot-v3
+```
+
+---
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FORGE_CACHE_DIR` | Dataset cache location | `~/.cache/forge` |
+| `FORGE_LOG_LEVEL` | Logging verbosity | `INFO` |
+
+---
+
+## Examples
+
+### Convert Open-X dataset for LeRobot training
+
+```bash
+# Download from HuggingFace
+forge hub --download openvla/droid_100
+
+# Inspect to understand structure
+forge inspect ~/.cache/forge/datasets/openvla/droid_100
+
+# Convert to LeRobot v3
+forge convert ~/.cache/forge/datasets/openvla/droid_100 \
+    ./droid_lerobot \
+    --format lerobot-v3 \
+    --workers 4
+```
+
+### Convert LeRobot dataset for OpenVLA/Octo training
+
+```bash
+# LeRobot → RLDS
+forge convert hf://lerobot/pusht ./pusht_rlds --format rlds
+```
+
+### Verify conversion quality
+
+```bash
+# Compare original vs converted
+forge visualize original_dataset/ --compare converted_dataset/
+
+# Check statistics match
+forge stats original_dataset/ --output original.json
+forge stats converted_dataset/ --output converted.json
+diff original.json converted.json
+```
