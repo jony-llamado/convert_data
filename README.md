@@ -24,6 +24,7 @@ forge inspect /path/to/dataset
 
 # Convert it
 forge convert /path/to/rlds ./output --format lerobot-v3
+forge convert hf://arpitg1304/stack_lego ./stack_lego_rlds --format rlds --workers 4 --visualize
 ```
 
 Works with HuggingFace Hub too:

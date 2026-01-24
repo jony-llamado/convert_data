@@ -705,58 +705,72 @@ def convert_cmd(
 
 @app.command("visualize")
 def visualize_cmd(
-    path: Path = typer.Argument(..., help="Path to dataset"),
-    compare: Path | None = typer.Option(
+    path: str = typer.Argument(..., help="Path to dataset (local path or hf://org/repo)"),
+    compare: str | None = typer.Option(
         None, "--compare", "-c", help="Second dataset for side-by-side comparison"
     ),
     episode: int = typer.Option(0, "--episode", "-e", help="Starting episode index"),
-    unified: bool = typer.Option(
-        True, "--unified/--legacy", help="Use unified viewer (works with any format)"
-    ),
 ) -> None:
     """Visualize a dataset interactively.
 
     Supports all formats (RLDS, LeRobot v2/v3, Zarr) through the unified viewer.
     Use --compare to show two datasets side-by-side for comparison.
+    Supports HuggingFace Hub URLs (hf://org/repo).
 
     Examples:
         forge visualize dataset.zarr
         forge visualize converted_lerobot_v3
+        forge visualize hf://lerobot/pusht
         forge visualize original/ --compare converted/
         forge visualize rlds_dataset/ --compare lerobot_output/
     """
     from forge.core.exceptions import ForgeError
+    from forge.hub import is_hf_url
 
-    if not path.exists():
-        console.print(f"[red]Error:[/red] Dataset not found: {path}")
-        raise typer.Exit(1)
+    # Resolve HuggingFace URLs to local paths
+    if is_hf_url(path):
+        try:
+            resolved_path = _resolve_dataset_path(path)
+        except Exception as e:
+            console.print(f"[red]Error downloading dataset:[/red] {e}")
+            raise typer.Exit(1)
+    else:
+        resolved_path = Path(path)
+        if not resolved_path.exists():
+            console.print(f"[red]Error:[/red] Dataset not found: {path}")
+            raise typer.Exit(1)
 
-    if compare and not compare.exists():
-        console.print(f"[red]Error:[/red] Comparison dataset not found: {compare}")
-        raise typer.Exit(1)
+    # Resolve comparison dataset if provided
+    resolved_compare: Path | None = None
+    if compare:
+        if is_hf_url(compare):
+            try:
+                resolved_compare = _resolve_dataset_path(compare)
+            except Exception as e:
+                console.print(f"[red]Error downloading comparison dataset:[/red] {e}")
+                raise typer.Exit(1)
+        else:
+            resolved_compare = Path(compare)
+            if not resolved_compare.exists():
+                console.print(f"[red]Error:[/red] Comparison dataset not found: {compare}")
+                raise typer.Exit(1)
 
     try:
-        if compare:
+        if resolved_compare:
             console.print(f"[cyan]Opening comparison viewer:[/cyan]")
-            console.print(f"  Left:  {path}")
-            console.print(f"  Right: {compare}")
+            console.print(f"  Left:  {resolved_path}")
+            console.print(f"  Right: {resolved_compare}")
         else:
-            console.print(f"[cyan]Opening viewer for:[/cyan] {path}")
+            console.print(f"[cyan]Opening viewer for:[/cyan] {resolved_path}")
 
         console.print("[dim]Controls: Episode/Frame sliders, Play/Pause button[/dim]")
         console.print()
 
-        if unified:
-            from forge.visualize import UnifiedViewer
+        from forge.visualize import UnifiedViewer
 
-            viewer = UnifiedViewer(path, compare)
-        else:
-            from forge.visualize import DatasetViewer
-
-            viewer = DatasetViewer(path, compare)
-
+        viewer = UnifiedViewer(resolved_path, resolved_compare)
         if episode > 0:
-            viewer.current_episode = min(episode, viewer.backends[0].get_num_episodes() - 1 if unified else viewer.backend.get_num_episodes() - 1)
+            viewer.current_episode = min(episode, viewer.backends[0].get_num_episodes() - 1)
         viewer.show()
 
     except ForgeError as e:

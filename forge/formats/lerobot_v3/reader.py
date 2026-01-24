@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from forge.core.exceptions import (
@@ -48,6 +49,117 @@ from forge.formats.registry import FormatRegistry
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+
+
+# Global video frame cache for efficient sequential access
+_video_cache: dict[str, "VideoFrameCache"] = {}
+_video_cache_lock = Lock()
+
+
+class VideoFrameCache:
+    """Cache for efficient sequential video frame access.
+
+    Keeps the video container open and decodes frames sequentially
+    for much faster playback than seeking for each frame.
+    """
+
+    def __init__(self, video_path: Path, max_cached_frames: int = 32):
+        self.video_path = video_path
+        self.max_cached = max_cached_frames
+        self._container = None
+        self._stream = None
+        self._current_frame_idx = -1
+        self._frame_cache: dict[int, Any] = {}  # frame_idx -> ndarray
+        self._lock = Lock()
+        self._fps = 30.0
+        self._total_frames = 0
+
+    def _open(self) -> bool:
+        """Open video container if not already open."""
+        if self._container is not None:
+            return True
+        try:
+            import av
+            self._container = av.open(str(self.video_path))
+            self._stream = self._container.streams.video[0]
+            self._fps = float(self._stream.average_rate) if self._stream.average_rate else 30.0
+            self._total_frames = self._stream.frames or 0
+            return True
+        except Exception:
+            return False
+
+    def get_frame(self, frame_idx: int, dims: tuple[int, int, int] = (480, 640, 3)) -> Any:
+        """Get a frame, using cache or sequential decode."""
+        import numpy as np
+
+        with self._lock:
+            # Check cache first
+            if frame_idx in self._frame_cache:
+                return self._frame_cache[frame_idx]
+
+            if not self._open():
+                return np.zeros(dims, dtype=np.uint8)
+
+            try:
+                # If we need to go backwards or skip far ahead, seek
+                if frame_idx < self._current_frame_idx or frame_idx > self._current_frame_idx + 30:
+                    self._seek_to_frame(frame_idx)
+
+                # Decode frames until we reach target
+                for frame in self._container.decode(self._stream):
+                    self._current_frame_idx += 1
+                    img = frame.to_ndarray(format="rgb24")
+
+                    # Cache this frame
+                    self._frame_cache[self._current_frame_idx] = img
+
+                    # Prune cache if too large
+                    if len(self._frame_cache) > self.max_cached:
+                        # Remove frames far from current
+                        to_remove = [k for k in self._frame_cache
+                                   if abs(k - frame_idx) > self.max_cached // 2]
+                        for k in to_remove[:len(self._frame_cache) - self.max_cached]:
+                            del self._frame_cache[k]
+
+                    if self._current_frame_idx >= frame_idx:
+                        return img
+
+                # Reached end of video
+                return np.zeros(dims, dtype=np.uint8)
+
+            except Exception:
+                return np.zeros(dims, dtype=np.uint8)
+
+    def _seek_to_frame(self, target_frame: int) -> None:
+        """Seek to a frame position."""
+        if self._stream is None:
+            return
+        try:
+            time_base = self._stream.time_base
+            target_pts = int(target_frame / self._fps / time_base)
+            self._container.seek(target_pts, stream=self._stream, backward=True, any_frame=False)
+            # Reset current position - we'll update it as we decode
+            self._current_frame_idx = max(0, target_frame - 10)  # Estimate
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        """Close the video container."""
+        with self._lock:
+            if self._container is not None:
+                self._container.close()
+                self._container = None
+                self._stream = None
+            self._frame_cache.clear()
+
+
+def get_video_cache(video_path: Path) -> VideoFrameCache:
+    """Get or create a video frame cache for a path."""
+    key = str(video_path)
+    with _video_cache_lock:
+        if key not in _video_cache:
+            _video_cache[key] = VideoFrameCache(video_path)
+        return _video_cache[key]
 
 
 def _check_pyarrow() -> None:
@@ -721,47 +833,137 @@ class LeRobotV3Reader:
                     if spec.get("dtype") == "video":
                         camera_features[key] = spec
 
+        # Get video path template from info.json
+        video_path_template = None
+        if info_path.exists():
+            with open(info_path) as f:
+                info_data = json.load(f)
+                video_path_template = info_data.get("video_path")
+
         videos_dir = dataset_path / "videos"
         if videos_dir.exists():
-            # Sort camera directories for consistent ordering across runs
-            for cam_dir in sorted(videos_dir.iterdir(), key=lambda p: p.name):
-                if not cam_dir.is_dir():
-                    continue
+            # Calculate episode chunk for chunked formats
+            info_path2 = dataset_path / "meta" / "info.json"
+            chunks_size = 1000
+            if info_path2.exists():
+                with open(info_path2) as f:
+                    info_data = json.load(f)
+                    chunks_size = info_data.get("chunks_size", 1000)
+            episode_chunk = episode_idx // chunks_size
 
-                cam_dir_name = cam_dir.name
+            # Handle different video path patterns
+            # Pattern 1: videos/chunk-XXX/{video_key}/episode_XXX.mp4 (chunk-first)
+            # Pattern 2: videos/{video_key}/chunk-XXX/file-XXX.mp4 (camera-first)
+            # Pattern 3: videos/train/{video_key}/episode_XXX.mp4 (split-based)
 
-                # Skip non-camera directories
-                if cam_dir_name in ("train", "test", "val", "validation"):
-                    # Old format: videos/train/{camera}/episode_XXX.mp4
-                    for sub_cam_dir in sorted(cam_dir.iterdir(), key=lambda p: p.name):
-                        if sub_cam_dir.is_dir():
-                            cam_name = sub_cam_dir.name.split(".")[-1]
-                            video_file = sub_cam_dir / f"{episode_id}.mp4"
-                            if video_file.exists():
-                                video_paths[cam_name] = video_file
-                                # Get dimensions from features
-                                full_key = f"observation.images.{cam_name}"
-                                if full_key in camera_features:
-                                    shape = camera_features[full_key].get("shape", [480, 640, 3])
-                                    video_dims[cam_name] = (shape[0], shape[1], shape[2] if len(shape) > 2 else 3)
-                    continue
+            # Check for chunk-first structure: videos/chunk-XXX/...
+            chunk_dir = videos_dir / f"chunk-{episode_chunk:03d}"
+            if chunk_dir.exists() and chunk_dir.is_dir():
+                # Chunk-first format: videos/chunk-XXX/{video_key}/episode_XXX.mp4
+                for cam_dir in sorted(chunk_dir.iterdir(), key=lambda p: p.name):
+                    if not cam_dir.is_dir():
+                        continue
+                    cam_key = cam_dir.name
+                    cam_name = cam_key.split(".")[-1]
+                    video_file = cam_dir / f"{episode_id}.mp4"
+                    if video_file.exists():
+                        video_paths[cam_name] = video_file
+                        if cam_key in camera_features:
+                            shape = camera_features[cam_key].get("shape", [480, 640, 3])
+                            video_dims[cam_name] = (shape[0], shape[1], shape[2] if len(shape) > 2 else 3)
+            else:
+                # Sort camera directories for consistent ordering across runs
+                for cam_dir in sorted(videos_dir.iterdir(), key=lambda p: p.name):
+                    if not cam_dir.is_dir():
+                        continue
 
-                # New chunked format: videos/observation.images.{cam}/chunk-XXX/file-XXX.mp4
-                # The parquet_path tells us which chunk/file this episode is in
-                cam_name = cam_dir_name.split(".")[-1]
+                    cam_dir_name = cam_dir.name
 
-                # Find the corresponding video file
-                # parquet is at data/chunk-XXX/file-XXX.parquet
-                # video should be at videos/{cam_key}/chunk-XXX/file-XXX.mp4
-                parquet_rel = parquet_path.relative_to(dataset_path / "data")
-                video_file = cam_dir / parquet_rel.with_suffix(".mp4")
+                    # Skip non-camera directories
+                    if cam_dir_name in ("train", "test", "val", "validation"):
+                        # Old format: videos/train/{camera}/episode_XXX.mp4
+                        for sub_cam_dir in sorted(cam_dir.iterdir(), key=lambda p: p.name):
+                            if sub_cam_dir.is_dir():
+                                cam_name = sub_cam_dir.name.split(".")[-1]
+                                video_file = sub_cam_dir / f"{episode_id}.mp4"
+                                if video_file.exists():
+                                    video_paths[cam_name] = video_file
+                                    # Get dimensions from features
+                                    full_key = f"observation.images.{cam_name}"
+                                    if full_key in camera_features:
+                                        shape = camera_features[full_key].get("shape", [480, 640, 3])
+                                        video_dims[cam_name] = (shape[0], shape[1], shape[2] if len(shape) > 2 else 3)
+                        continue
 
-                if video_file.exists():
-                    video_paths[cam_name] = video_file
-                    # Get dimensions from features
-                    if cam_dir_name in camera_features:
-                        shape = camera_features[cam_dir_name].get("shape", [480, 640, 3])
-                        video_dims[cam_name] = (shape[0], shape[1], shape[2] if len(shape) > 2 else 3)
+                    # Skip chunk directories at this level (handled above)
+                    if cam_dir_name.startswith("chunk-"):
+                        continue
+
+                    # Camera-first format: videos/observation.images.{cam}/chunk-XXX/file-XXX.mp4
+                    cam_name = cam_dir_name.split(".")[-1]
+
+                    # Find ALL video files in the chunk directory for this camera
+                    # (handles split videos like file-000.mp4, file-001.mp4)
+                    parquet_rel = parquet_path.relative_to(dataset_path / "data")
+                    chunk_dir = cam_dir / parquet_rel.parent
+
+                    if chunk_dir.exists():
+                        video_files = sorted(chunk_dir.glob("file-*.mp4"))
+                        if video_files:
+                            # For simple case, just use the first file
+                            # We'll handle split files in load_frames
+                            video_paths[cam_name] = video_files[0]
+                            # Store all video files for this camera
+                            video_paths[f"_all_{cam_name}"] = video_files
+                            # Get dimensions from features
+                            if cam_dir_name in camera_features:
+                                shape = camera_features[cam_dir_name].get("shape", [480, 640, 3])
+                                video_dims[cam_name] = (shape[0], shape[1], shape[2] if len(shape) > 2 else 3)
+
+        # Determine if this is a multi-episode video format
+        # Multi-episode: video_path template has {file_index} (e.g., file-000.mp4)
+        # Single-episode: video_path template has episode_{episode_index} (e.g., episode_000000.mp4)
+        is_multi_episode_video = False
+        if video_path_template and "{file_index" in video_path_template:
+            is_multi_episode_video = True
+
+        # Build video file frame ranges for split video handling
+        # Maps camera_name -> list of (start_frame, end_frame, video_path)
+        video_frame_ranges: dict[str, list[tuple[int, int, Path]]] = {}
+        for cam_name in list(video_paths.keys()):
+            if cam_name.startswith("_all_"):
+                continue
+            all_key = f"_all_{cam_name}"
+            if all_key in video_paths:
+                video_files = video_paths[all_key]
+                ranges = []
+                cumulative_frames = 0
+                for vf in video_files:
+                    try:
+                        import av
+                        with av.open(str(vf)) as container:
+                            stream = container.streams.video[0]
+                            frame_count = stream.frames or 0
+                            if frame_count == 0:
+                                # Estimate from duration
+                                fps = float(stream.average_rate) if stream.average_rate else 30.0
+                                if stream.duration:
+                                    frame_count = int(stream.duration * stream.time_base * fps)
+                        ranges.append((cumulative_frames, cumulative_frames + frame_count - 1, vf))
+                        cumulative_frames += frame_count
+                    except Exception:
+                        ranges.append((cumulative_frames, cumulative_frames + 100000, vf))
+                        cumulative_frames += 100000
+                video_frame_ranges[cam_name] = ranges
+
+        def find_video_for_frame(cam_name: str, global_idx: int) -> tuple[Path, int]:
+            """Find the video file and local frame index for a global frame index."""
+            if cam_name in video_frame_ranges:
+                for start, end, vpath in video_frame_ranges[cam_name]:
+                    if start <= global_idx <= end:
+                        return vpath, global_idx - start
+            # Fallback to single video file
+            return video_paths.get(cam_name, video_paths.get(list(video_paths.keys())[0])), global_idx
 
         def load_frames() -> Iterator[Frame]:
             for idx in range(len(ep_df)):
@@ -769,18 +971,34 @@ class LeRobotV3Reader:
                 images: dict[str, LazyImage] = {}
 
                 # Get the frame index within the video
-                # For chunked format, the 'index' column is the global frame index
-                # and the video contains ALL frames from the parquet file
-                if "index" in ep_df.columns:
-                    # Use global index directly - video has all frames from the chunk
-                    video_frame_idx = int(row["index"])
+                if is_multi_episode_video and "index" in ep_df.columns:
+                    # Multi-episode video: use global index for seeking
+                    global_frame_idx = int(row["index"])
+                elif "frame_index" in ep_df.columns:
+                    # Single-episode video: use relative frame_index
+                    global_frame_idx = int(row["frame_index"])
+                elif "index" in ep_df.columns:
+                    # Fallback: use index relative to first frame in episode
+                    first_idx = int(ep_df.iloc[0]["index"])
+                    global_frame_idx = int(row["index"]) - first_idx
                 else:
-                    video_frame_idx = idx
+                    global_frame_idx = idx
 
-                for cam_name, video_path in video_paths.items():
+                for cam_name in video_paths.keys():
+                    # Skip internal entries
+                    if cam_name.startswith("_all_"):
+                        continue
+
                     dims = video_dims.get(cam_name, (480, 640, 3))
 
-                    def make_loader(vp: Path = video_path, fi: int = video_frame_idx, d: tuple = dims) -> NDArray[Any]:
+                    # Find the right video file for this frame
+                    if is_multi_episode_video and video_frame_ranges.get(cam_name):
+                        video_path, local_frame_idx = find_video_for_frame(cam_name, global_frame_idx)
+                    else:
+                        video_path = video_paths[cam_name]
+                        local_frame_idx = global_frame_idx
+
+                    def make_loader(vp: Path = video_path, fi: int = local_frame_idx, d: tuple = dims) -> NDArray[Any]:
                         return self._extract_frame(vp, fi, d)
 
                     images[cam_name] = LazyImage(
@@ -837,42 +1055,10 @@ class LeRobotV3Reader:
         frame_index: int,
         dims: tuple[int, int, int] = (480, 640, 3),
     ) -> NDArray[Any]:
-        """Extract a single frame from video using efficient seeking."""
-        try:
-            import av
-            import numpy as np
-
-            with av.open(str(video_path)) as container:
-                stream = container.streams.video[0]
-
-                # Use keyframe seeking for efficiency
-                # Seek to nearest keyframe before target frame
-                if frame_index > 0 and stream.duration:
-                    # Calculate timestamp for seeking
-                    time_base = stream.time_base
-                    fps = float(stream.average_rate) if stream.average_rate else 30.0
-                    target_pts = int(frame_index / fps / time_base)
-                    container.seek(target_pts, stream=stream, backward=True, any_frame=False)
-
-                # Decode from keyframe to target frame
-                for i, frame in enumerate(container.decode(stream)):
-                    # After seeking, frame indices restart from seek point
-                    # We need to track actual frame number via pts
-                    if stream.average_rate:
-                        fps = float(stream.average_rate)
-                        current_frame = int(frame.pts * time_base * fps) if frame.pts else i
-                    else:
-                        current_frame = i
-
-                    if current_frame >= frame_index:
-                        return frame.to_ndarray(format="rgb24")
-
-            return np.zeros(dims, dtype=np.uint8)
-
-        except (ImportError, Exception):
-            import numpy as np
-
-            return np.zeros(dims, dtype=np.uint8)
+        """Extract a single frame from video using cached sequential access."""
+        # Use global video cache for efficient sequential playback
+        cache = get_video_cache(video_path)
+        return cache.get_frame(frame_index, dims)
 
     def read_episode(self, path: Path, episode_id: str) -> Episode:
         """Read a specific episode by ID.

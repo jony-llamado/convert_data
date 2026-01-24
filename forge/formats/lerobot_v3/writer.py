@@ -338,6 +338,11 @@ class LeRobotV3Writer:
         self._total_frames += len(frame_list)
         self._episodes_in_current_chunk += 1
 
+        # Flush after each episode to bound memory usage and show progress
+        # This creates one chunk per episode (matching parallel mode behavior)
+        self._flush_chunk(output_path)
+        self._current_chunk_index += 1
+
     def write_dataset(
         self,
         episodes: Iterator[Episode],
@@ -452,13 +457,8 @@ class LeRobotV3Writer:
             "names": None,
         }
 
-        # Calculate number of chunks
-        # In parallel mode (no episode metadata), each episode gets its own chunk
-        if self._episode_metadata:
-            num_chunks = (total_episodes + self.config.chunks_size - 1) // self.config.chunks_size
-        else:
-            # Parallel mode: each episode is in its own chunk
-            num_chunks = total_episodes
+        # Calculate number of chunks (each episode is its own chunk)
+        num_chunks = total_episodes
 
         # In parallel mode, infer features from the first data file
         if not self._features or len(self._features) <= 5:  # Only standard features
@@ -519,8 +519,8 @@ class LeRobotV3Writer:
 
         # Build info.json
         total_tasks = len(self._task_metadata) if self._task_metadata else 1
-        # In parallel mode, each episode is in its own chunk (chunks_size=1)
-        effective_chunks_size = self.config.chunks_size if self._episode_metadata else 1
+        # Each episode is written to its own chunk (memory-efficient streaming)
+        effective_chunks_size = 1
         info = {
             "codebase_version": "v3.0",
             "robot_type": self.config.robot_type or dataset_info.inferred_robot_type or "unknown",
@@ -543,18 +543,14 @@ class LeRobotV3Writer:
         with open(meta_dir / "info.json", "w") as f:
             json.dump(info, f, indent=2)
 
-        # Write episodes metadata in chunked parquet format
+        # Write episodes metadata in chunked parquet format (one episode per chunk)
         if self._episode_metadata:
-            # Sequential mode: write accumulated episode metadata
-            for chunk_idx in range(num_chunks):
-                start_idx = chunk_idx * self.config.chunks_size
-                end_idx = min(start_idx + self.config.chunks_size, total_episodes)
-                chunk_episodes = self._episode_metadata[start_idx:end_idx]
-
+            # Sequential mode: write one episode metadata file per chunk
+            for chunk_idx, ep_meta in enumerate(self._episode_metadata):
                 episodes_dir = meta_dir / "episodes" / f"chunk-{chunk_idx:03d}"
                 episodes_dir.mkdir(parents=True, exist_ok=True)
 
-                table = pa.Table.from_pylist(chunk_episodes)
+                table = pa.Table.from_pylist([ep_meta])
                 pq.write_table(table, episodes_dir / "file-000.parquet")
         else:
             # Parallel mode: generate episode metadata

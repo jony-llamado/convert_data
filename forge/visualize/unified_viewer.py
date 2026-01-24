@@ -414,28 +414,34 @@ class UnifiedViewer:
         if not self.playing:
             return
 
-        max_frame = self.backends[0].get_episode_length(self.current_episode) - 1
-        if self.current_frame < max_frame:
-            self.current_frame += 1
-            self.frame_slider.set_val(self.current_frame)
-            self._update_display()  # Ensure display updates even if slider callback doesn't fire
-        else:
+        try:
+            max_frame = self.backends[0].get_episode_length(self.current_episode) - 1
+            if self.current_frame < max_frame:
+                self.current_frame += 1
+                self.frame_slider.set_val(self.current_frame)
+                self._update_display()  # Ensure display updates even if slider callback doesn't fire
+            else:
+                self.playing = False
+                self.play_button.label.set_text('Play')
+                return
+
+            # Schedule next frame
+            fps = self.backends[0].get_fps()
+            interval = 1000 / fps  # ms
+            try:
+                # Try Tkinter backend
+                self.fig.canvas.get_tk_widget().after(int(interval), self._animate)
+            except AttributeError:
+                # Fallback for other backends - use timer
+                timer = self.fig.canvas.new_timer(interval=int(interval))
+                timer.add_callback(lambda: self._animate())
+                timer.single_shot = True
+                timer.start()
+        except Exception as e:
+            # Stop animation on error but don't crash
+            print(f"Animation error: {e}")
             self.playing = False
             self.play_button.label.set_text('Play')
-            return
-
-        # Schedule next frame
-        fps = self.backends[0].get_fps()
-        interval = 1000 / fps  # ms
-        try:
-            # Try Tkinter backend
-            self.fig.canvas.get_tk_widget().after(int(interval), self._animate)
-        except AttributeError:
-            # Fallback for other backends - use timer
-            timer = self.fig.canvas.new_timer(interval=int(interval))
-            timer.add_callback(lambda: self._animate())
-            timer.single_shot = True
-            timer.start()
 
     def _update_plots(self) -> None:
         """Update plot data for current episode."""
