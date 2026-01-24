@@ -12,6 +12,18 @@ Convert between robotics dataset formats with one command.
 
 See [docs/model_formats.md](docs/model_formats.md) for which models (Octo, OpenVLA, ACT, Diffusion Policy, etc.) use which format.
 
+## Why Forge?
+
+Every robotics lab has their own data format: Open-X uses RLDS, HuggingFace uses LeRobot, Diffusion Policy uses Zarr, robomimic uses HDF5. Want to train Octo on your ALOHA data? Write a converter. Want to use LeRobot on Open-X datasets? Write another.
+
+Forge uses a hub-and-spoke architecture — one intermediate representation, O(n) format support:
+
+```
+Any Reader → Episode/Frame → Any Writer
+```
+
+Add a reader, get all writers for free. Add a writer, get all readers for free. No N×M conversion logic. See [docs/architecture.md](docs/architecture.md) for details.
+
 ## Quick Start
 
 ```bash
@@ -72,16 +84,6 @@ forge convert my_dataset/ output/ --config config.yaml
 ```
 
 See [docs/configuration.md](docs/configuration.md) for details.
-
-## Architecture
-
-Forge uses a hub-and-spoke design: all formats convert through a unified `Episode/Frame` model.
-
-```
-Any Reader → Episode/Frame → Any Writer
-```
-
-This means adding a new reader automatically works with all writers (and vice versa), avoiding N×M conversion logic. See [docs/architecture.md](docs/architecture.md) for details.
 
 ## Roadmap
 

@@ -84,6 +84,7 @@ conversions/
 # Internal planning docs
 PROJECT_PLAN.md
 RESEARCH_DIRECTIONS.md
+INTRO_DRAFTS.md
 
 # HuggingFace cache (user-specific)
 # ~/.cache/forge/ is outside repo, but just in case
