@@ -83,6 +83,17 @@ Any Reader → Episode/Frame → Any Writer
 
 This means adding a new reader automatically works with all writers (and vice versa), avoiding N×M conversion logic. See [docs/architecture.md](docs/architecture.md) for details.
 
+## Roadmap
+
+Planned features (contributions welcome!):
+
+- [ ] **Streaming reads** - Process HuggingFace datasets without full download
+- [ ] **Episode filtering** - Convert only specific episodes (`--episodes 100-200`)
+- [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
+- [ ] **GR00T format** - Write to NVIDIA Isaac GR00T training format
+- [ ] **Distributed conversion** - Scale to 100K+ episode datasets across nodes
+- [ ] **Conversion verification** - Automated diff between source and converted data
+
 ## Development
 
 ```bash
