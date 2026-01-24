@@ -55,6 +55,8 @@ class UnifiedBackend:
         self._camera_keys: list[str] = []
         self._numeric_keys: list[str] = []
         self._image_shapes: dict[str, tuple[int, int, int]] = {}
+        # Cache images as they're loaded (replay same episode is fast)
+        self._image_cache: dict[tuple[int, int, str], np.ndarray] = {}
 
         # Load episodes up to limit
         for i, episode in enumerate(self.reader.read_episodes(dataset_path)):
@@ -105,6 +107,11 @@ class UnifiedBackend:
         return len(self._episodes[episode_idx])
 
     def get_frame_image(self, episode_idx: int, frame_idx: int, camera_key: str) -> np.ndarray | None:
+        # Try cache first
+        cache_key = (episode_idx, frame_idx, camera_key)
+        if cache_key in self._image_cache:
+            return self._image_cache[cache_key]
+
         if episode_idx >= len(self._episodes):
             return None
         frames = self._episodes[episode_idx]
@@ -125,6 +132,8 @@ class UnifiedBackend:
             else:
                 img = np.clip(img, 0, 255).astype(np.uint8)
 
+        # Cache for replay
+        self._image_cache[cache_key] = img
         return img
 
     def get_frame_data(self, episode_idx: int, frame_idx: int, feature_key: str) -> np.ndarray | None:
@@ -238,30 +247,36 @@ class UnifiedViewer:
         cameras_per_backend = [backend.get_camera_keys() for backend in self.backends]
         max_cameras = max(len(cams) for cams in cameras_per_backend)
 
-        numeric_keys = self.backends[0].get_numeric_keys()[:3]  # Limit to 3 plots
+        # Only include numeric keys that have actual data
+        numeric_keys = []
+        for key in self.backends[0].get_numeric_keys()[:3]:
+            data = self.backends[0].get_episode_data(0, key)
+            if data is not None and data.size > 0:
+                numeric_keys.append(key)
 
         num_plots = len(numeric_keys)
 
         # Calculate figure size
         if self.comparison_mode:
-            fig_width = 14
+            fig_width = 12
             n_cols = 2
         else:
-            fig_width = 10
+            fig_width = 8
             n_cols = 1
 
         n_image_rows = max(1, max_cameras)
-        n_plot_rows = max(1, num_plots)
-        fig_height = 3 * n_image_rows + 2 * n_plot_rows + 1.5
+        n_plot_rows = num_plots if num_plots > 0 else 0
+        fig_height = 3 * n_image_rows + (1.5 * n_plot_rows if n_plot_rows > 0 else 0) + 1
 
         self.fig = self.plt.figure(figsize=(fig_width, fig_height))
 
         # Create grid
-        total_rows = n_image_rows + n_plot_rows
+        total_rows = n_image_rows + n_plot_rows if n_plot_rows > 0 else n_image_rows
+        height_ratios = [3] * n_image_rows + ([1.5] * n_plot_rows if n_plot_rows > 0 else []) + [0.3]
         gs = self.fig.add_gridspec(
             total_rows + 1, n_cols,
-            height_ratios=[3] * n_image_rows + [2] * n_plot_rows + [0.5],
-            hspace=0.3, wspace=0.2
+            height_ratios=height_ratios,
+            hspace=0.4, wspace=0.15
         )
 
         # Image displays - each backend uses its own camera keys
@@ -273,40 +288,43 @@ class UnifiedViewer:
                 ax = self.fig.add_subplot(gs[row, col])
                 if row < len(backend_cameras):
                     cam_key = backend_cameras[row]
-                    ax.set_title(f"{backend.get_name()}\n{cam_key}", fontsize=9)
+                    # Shorter title - just camera name
+                    short_cam = cam_key.split('/')[-1].replace('_image', '')
+                    ax.set_title(short_cam, fontsize=8, pad=2)
                     self.image_displays[b_idx].append((ax, cam_key))
                 else:
-                    ax.set_title(f"{backend.get_name()}\n(no camera)", fontsize=9)
+                    ax.axis('off')
                     self.image_displays[b_idx].append((ax, None))
                 ax.axis('off')
 
-        # Plot displays
+        # Plot displays - only if we have data
         self.plot_displays = [[] for _ in range(num_backends)]
-        for b_idx, backend in enumerate(self.backends):
-            col = b_idx if self.comparison_mode else 0
-            for row, feat_key in enumerate(numeric_keys):
-                ax = self.fig.add_subplot(gs[n_image_rows + row, col])
-                ax.set_title(f"{backend.get_name()}\n{feat_key}", fontsize=9)
-                ax.set_xlabel("Frame")
+        if n_plot_rows > 0:
+            for b_idx, backend in enumerate(self.backends):
+                col = b_idx if self.comparison_mode else 0
+                for row, feat_key in enumerate(numeric_keys):
+                    ax = self.fig.add_subplot(gs[n_image_rows + row, col])
+                    ax.set_title(feat_key, fontsize=7, pad=1)
+                    ax.tick_params(axis='both', labelsize=6)
 
-                # Initial plot
-                ep_data = backend.get_episode_data(self.current_episode, feat_key)
-                lines = []
-                if ep_data is not None:
-                    if len(ep_data.shape) > 2:
-                        ep_data = ep_data.reshape(ep_data.shape[0], -1)
+                    # Initial plot
+                    ep_data = backend.get_episode_data(self.current_episode, feat_key)
+                    lines = []
+                    if ep_data is not None:
+                        if len(ep_data.shape) > 2:
+                            ep_data = ep_data.reshape(ep_data.shape[0], -1)
 
-                    if len(ep_data.shape) > 1:
-                        for dim in range(min(ep_data.shape[1], 7)):
-                            line, = ax.plot(ep_data[:, dim], alpha=0.7)
+                        if len(ep_data.shape) > 1:
+                            for dim in range(min(ep_data.shape[1], 6)):
+                                line, = ax.plot(ep_data[:, dim], alpha=0.6, linewidth=0.8)
+                                lines.append(line)
+                        else:
+                            line, = ax.plot(ep_data, linewidth=0.8)
                             lines.append(line)
-                    else:
-                        line, = ax.plot(ep_data)
-                        lines.append(line)
 
-                # Frame marker
-                marker = ax.axvline(x=0, color='red', linestyle='--', alpha=0.7)
-                self.plot_displays[b_idx].append((ax, lines, marker, feat_key))
+                    # Frame marker
+                    marker = ax.axvline(x=0, color='red', linestyle='--', alpha=0.5, linewidth=1)
+                    self.plot_displays[b_idx].append((ax, lines, marker, feat_key))
 
         # Controls
         control_ax = self.fig.add_subplot(gs[-1, :])
@@ -339,22 +357,30 @@ class UnifiedViewer:
         """Update all displays for current episode/frame."""
         for b_idx, backend in enumerate(self.backends):
             # Update images
-            for ax, cam_key in self.image_displays[b_idx]:
+            for idx, (ax, cam_key) in enumerate(self.image_displays[b_idx]):
                 if cam_key is None:
                     continue
                 img = backend.get_frame_image(self.current_episode, self.current_frame, cam_key)
                 if img is not None:
-                    ax.clear()
-                    ax.imshow(img)
-                    ax.set_title(f"{backend.get_name()}\n{cam_key}", fontsize=9)
-                    ax.axis('off')
+                    # Update existing image if possible, else create new
+                    if ax.images:
+                        ax.images[0].set_data(img)
+                    else:
+                        ax.imshow(img)
+                        ax.axis('off')
 
             # Update plot markers
             if b_idx < len(self.plot_displays):
                 for ax, lines, marker, feat_key in self.plot_displays[b_idx]:
                     marker.set_xdata([self.current_frame, self.current_frame])
 
-        self.fig.canvas.draw_idle()
+        # Use blit-friendly update if playing, full draw otherwise
+        if self.playing:
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+        else:
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
 
     def _on_episode_change(self, val: float) -> None:
         """Handle episode slider change."""
@@ -392,6 +418,7 @@ class UnifiedViewer:
         if self.current_frame < max_frame:
             self.current_frame += 1
             self.frame_slider.set_val(self.current_frame)
+            self._update_display()  # Ensure display updates even if slider callback doesn't fire
         else:
             self.playing = False
             self.play_button.label.set_text('Play')
@@ -400,7 +427,15 @@ class UnifiedViewer:
         # Schedule next frame
         fps = self.backends[0].get_fps()
         interval = 1000 / fps  # ms
-        self.fig.canvas.get_tk_widget().after(int(interval), self._animate)
+        try:
+            # Try Tkinter backend
+            self.fig.canvas.get_tk_widget().after(int(interval), self._animate)
+        except AttributeError:
+            # Fallback for other backends - use timer
+            timer = self.fig.canvas.new_timer(interval=int(interval))
+            timer.add_callback(lambda: self._animate())
+            timer.single_shot = True
+            timer.start()
 
     def _update_plots(self) -> None:
         """Update plot data for current episode."""

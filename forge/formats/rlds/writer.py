@@ -133,14 +133,14 @@ class RLDSWriter:
         if source_name in self.config.camera_name_mapping:
             return self.config.camera_name_mapping[source_name]
 
-        # Clean up LeRobot-style names
+        # Clean up LeRobot-style names and ensure _image suffix for RLDS compatibility
         clean_name = source_name
         if clean_name.startswith("observation.images."):
             clean_name = clean_name.replace("observation.images.", "")
-        if clean_name.endswith("_image"):
-            clean_name = clean_name[:-6]
-        if clean_name.endswith("_rgb"):
-            clean_name = clean_name[:-4]
+
+        # Ensure camera names have _image suffix for RLDS reader compatibility
+        if not any(clean_name.endswith(suffix) for suffix in ["_image", "_rgb", "_img", "_frame"]):
+            clean_name = f"{clean_name}_image"
 
         return clean_name
 

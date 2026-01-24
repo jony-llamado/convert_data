@@ -723,7 +723,8 @@ class LeRobotV3Reader:
 
         videos_dir = dataset_path / "videos"
         if videos_dir.exists():
-            for cam_dir in videos_dir.iterdir():
+            # Sort camera directories for consistent ordering across runs
+            for cam_dir in sorted(videos_dir.iterdir(), key=lambda p: p.name):
                 if not cam_dir.is_dir():
                     continue
 
@@ -732,7 +733,7 @@ class LeRobotV3Reader:
                 # Skip non-camera directories
                 if cam_dir_name in ("train", "test", "val", "validation"):
                     # Old format: videos/train/{camera}/episode_XXX.mp4
-                    for sub_cam_dir in cam_dir.iterdir():
+                    for sub_cam_dir in sorted(cam_dir.iterdir(), key=lambda p: p.name):
                         if sub_cam_dir.is_dir():
                             cam_name = sub_cam_dir.name.split(".")[-1]
                             video_file = sub_cam_dir / f"{episode_id}.mp4"
@@ -768,10 +769,11 @@ class LeRobotV3Reader:
                 images: dict[str, LazyImage] = {}
 
                 # Get the frame index within the video
-                # For chunked format, use the 'index' column which is global
+                # For chunked format, the 'index' column is the global frame index
+                # and the video contains ALL frames from the parquet file
                 if "index" in ep_df.columns:
-                    # Find frame offset in video (video contains all frames in the parquet)
-                    video_frame_idx = int(row["index"]) - int(ep_df.iloc[0]["index"]) if len(ep_df) > 0 else idx
+                    # Use global index directly - video has all frames from the chunk
+                    video_frame_idx = int(row["index"])
                 else:
                     video_frame_idx = idx
 
@@ -835,7 +837,7 @@ class LeRobotV3Reader:
         frame_index: int,
         dims: tuple[int, int, int] = (480, 640, 3),
     ) -> NDArray[Any]:
-        """Extract a single frame from video."""
+        """Extract a single frame from video using efficient seeking."""
         try:
             import av
             import numpy as np
@@ -843,13 +845,31 @@ class LeRobotV3Reader:
             with av.open(str(video_path)) as container:
                 stream = container.streams.video[0]
 
+                # Use keyframe seeking for efficiency
+                # Seek to nearest keyframe before target frame
+                if frame_index > 0 and stream.duration:
+                    # Calculate timestamp for seeking
+                    time_base = stream.time_base
+                    fps = float(stream.average_rate) if stream.average_rate else 30.0
+                    target_pts = int(frame_index / fps / time_base)
+                    container.seek(target_pts, stream=stream, backward=True, any_frame=False)
+
+                # Decode from keyframe to target frame
                 for i, frame in enumerate(container.decode(stream)):
-                    if i == frame_index:
+                    # After seeking, frame indices restart from seek point
+                    # We need to track actual frame number via pts
+                    if stream.average_rate:
+                        fps = float(stream.average_rate)
+                        current_frame = int(frame.pts * time_base * fps) if frame.pts else i
+                    else:
+                        current_frame = i
+
+                    if current_frame >= frame_index:
                         return frame.to_ndarray(format="rgb24")
 
             return np.zeros(dims, dtype=np.uint8)
 
-        except ImportError:
+        except (ImportError, Exception):
             import numpy as np
 
             return np.zeros(dims, dtype=np.uint8)

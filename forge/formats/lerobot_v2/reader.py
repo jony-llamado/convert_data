@@ -441,23 +441,36 @@ class LeRobotV2Reader:
         )
 
     def _extract_frame(self, video_path: Path, frame_index: int) -> NDArray[Any]:
-        """Extract a single frame from video."""
+        """Extract a single frame from video using efficient seeking."""
         try:
             import av
             import numpy as np
 
             with av.open(str(video_path)) as container:
                 stream = container.streams.video[0]
-                stream.codec_context.skip_frame = "NONKEY"
 
-                for i, frame in enumerate(container.decode(stream)):
-                    if i == frame_index:
+                # Use keyframe seeking for efficiency
+                if frame_index > 0 and stream.duration:
+                    time_base = stream.time_base
+                    fps = float(stream.average_rate) if stream.average_rate else 30.0
+                    target_pts = int(frame_index / fps / time_base)
+                    container.seek(target_pts, stream=stream, backward=True, any_frame=False)
+
+                # Decode from keyframe to target frame
+                for frame in container.decode(stream):
+                    if stream.average_rate:
+                        fps = float(stream.average_rate)
+                        current_frame = int(frame.pts * time_base * fps) if frame.pts else 0
+                    else:
+                        current_frame = 0
+
+                    if current_frame >= frame_index:
                         return frame.to_ndarray(format="rgb24")
 
             # If we didn't find the frame, return black
             return np.zeros((480, 640, 3), dtype=np.uint8)
 
-        except ImportError:
+        except (ImportError, Exception):
             import numpy as np
 
             return np.zeros((480, 640, 3), dtype=np.uint8)

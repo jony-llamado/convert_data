@@ -6,7 +6,7 @@ Convert between robotics dataset formats with one command.
 |--------|:----:|:-----:|-------|
 | RLDS | ✓ | ✓ | Open-X, TensorFlow Datasets |
 | LeRobot v2/v3 | ✓ | ✓ | HuggingFace, Parquet + MP4 |
-| Zarr | ✓ | ✓ | Diffusion Policy, UMI |
+| Zarr | ✓ | - | Diffusion Policy, UMI |
 | HDF5 | ✓ | - | robomimic, ACT/ALOHA |
 | Rosbag | ✓ | - | ROS1 .bag, ROS2 MCAP |
 
@@ -71,6 +71,16 @@ forge convert my_dataset/ output/ --config config.yaml
 ```
 
 See [docs/configuration.md](docs/configuration.md) for details.
+
+## Architecture
+
+Forge uses a hub-and-spoke design: all formats convert through a unified `Episode/Frame` model.
+
+```
+Any Reader → Episode/Frame → Any Writer
+```
+
+This means adding a new reader automatically works with all writers (and vice versa), avoiding N×M conversion logic. See [docs/architecture.md](docs/architecture.md) for details.
 
 ## Development
 

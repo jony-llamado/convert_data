@@ -211,6 +211,36 @@ def inspect_cmd(
         _quick_inspect_hub(path, output)
         return
 
+    # Check dataset size for HuggingFace URLs and offer --quick for large datasets
+    if is_hf_url(path) and not quick:
+        try:
+            from huggingface_hub import HfApi
+            from forge.hub import parse_hf_url
+
+            ref = parse_hf_url(path)
+            api = HfApi()
+
+            with console.status("[dim]Checking dataset size...[/dim]"):
+                # Use files_metadata=True to get file sizes
+                info = api.dataset_info(ref.repo_id, revision=ref.revision, files_metadata=True)
+                # Calculate total size from siblings (file list)
+                total_size = 0
+                num_files = 0
+                if info.siblings:
+                    total_size = sum(s.size or 0 for s in info.siblings if s.size)
+                    num_files = len(info.siblings)
+
+            # Warn if dataset is large (> 500MB)
+            if total_size > 500_000_000:
+                size_gb = total_size / 1_000_000_000
+                console.print(f"[yellow]Warning:[/yellow] Dataset is large ({size_gb:.2f} GB, {num_files} files)")
+                use_quick = typer.confirm("Use --quick mode (metadata only, no download)?", default=True)
+                if use_quick:
+                    _quick_inspect_hub(path, output)
+                    return
+        except Exception:
+            pass  # Continue with normal flow if size check fails
+
     from forge.inspect import InspectionOptions, Inspector
 
     # Resolve HuggingFace URLs to local paths

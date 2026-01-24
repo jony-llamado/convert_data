@@ -589,37 +589,75 @@ class RLDSReader:
 
         example = tf.train.Example()
         example.ParseFromString(raw_record.numpy())
+        features = example.features.feature
 
-        # Create a simple episode from the flat example
-        # This is a simplified fallback - real RLDS has nested structure
+        # Determine number of steps from a sequence field
+        num_steps = 1
+        for key, feature in features.items():
+            if key.startswith("steps/") and feature.HasField("int64_list"):
+                num_steps = len(feature.int64_list.value)
+                break
+            elif key.startswith("steps/") and feature.HasField("bytes_list"):
+                num_steps = len(feature.bytes_list.value)
+                break
+
+        # Detect action/state dimensions
+        action_dim = None
+        state_dim = None
+        for key, feature in features.items():
+            if feature.HasField("float_list"):
+                n_values = len(feature.float_list.value)
+                if "action" in key.lower() and n_values > 0:
+                    action_dim = n_values // num_steps if num_steps > 0 else n_values
+                elif ("state" in key.lower() or "observation" in key.lower()) and "image" not in key.lower():
+                    state_dim = n_values // num_steps if num_steps > 0 else n_values
+
         def load_frames() -> Iterator[Frame]:
-            features = example.features.feature
-            images: dict[str, LazyImage] = {}
-            state = None
-            action = None
+            import io
+            import numpy as np
+            from PIL import Image
+
+            # Pre-extract all data
+            image_data: dict[str, list] = {}
+            action_data: NDArray[Any] | None = None
+            state_data: NDArray[Any] | None = None
 
             for key, feature in features.items():
                 if feature.HasField("bytes_list") and self._looks_like_image(key):
-
-                    def make_loader(f: Any = feature) -> NDArray[Any]:
-                        import numpy as np
-
-                        data = f.bytes_list.value[0]
-                        return np.frombuffer(data, dtype=np.uint8).reshape(480, 640, 3)
-
-                    images[key] = LazyImage(loader=make_loader, height=480, width=640, channels=3)
+                    image_data[key] = list(feature.bytes_list.value)
                 elif feature.HasField("float_list"):
-                    values = list(feature.float_list.value)
-                    if "state" in key.lower() or "proprio" in key.lower():
-                        import numpy as np
+                    values = np.array(feature.float_list.value, dtype=np.float32)
+                    if "action" in key.lower():
+                        action_data = values.reshape(num_steps, -1) if num_steps > 1 else values
+                    elif ("state" in key.lower() or "observation" in key.lower()) and "image" not in key.lower():
+                        state_data = values.reshape(num_steps, -1) if num_steps > 1 else values
 
-                        state = np.array(values, dtype=np.float32)
-                    elif "action" in key.lower():
-                        import numpy as np
+            # Yield frames
+            for step_idx in range(num_steps):
+                images: dict[str, LazyImage] = {}
 
-                        action = np.array(values, dtype=np.float32)
+                for cam_key, img_list in image_data.items():
+                    if step_idx < len(img_list):
+                        def make_loader(data: bytes = img_list[step_idx]) -> NDArray[Any]:
+                            try:
+                                img = Image.open(io.BytesIO(data))
+                                return np.array(img)
+                            except Exception:
+                                return np.frombuffer(data, dtype=np.uint8).reshape(480, 640, 3)
 
-            yield Frame(index=0, images=images, state=state, action=action, is_first=True)
+                        images[cam_key] = LazyImage(loader=make_loader, height=480, width=640, channels=3)
+
+                action = action_data[step_idx] if action_data is not None and len(action_data.shape) > 1 else action_data
+                state = state_data[step_idx] if state_data is not None and len(state_data.shape) > 1 else state_data
+
+                yield Frame(
+                    index=step_idx,
+                    images=images,
+                    state=state,
+                    action=action,
+                    is_first=(step_idx == 0),
+                    is_last=(step_idx == num_steps - 1),
+                )
 
         return Episode(episode_id=episode_id, _frame_loader=load_frames)
 

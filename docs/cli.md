@@ -18,6 +18,15 @@ forge inspect hf://lerobot/pusht --quick
 
 # Generate a conversion config template
 forge inspect /path/to/dataset --generate-config config.yaml
+
+# Output as JSON
+forge inspect /path/to/dataset --output json
+
+# Deep scan (reads all episodes, slower but more accurate)
+forge inspect /path/to/dataset --deep
+
+# Sample specific number of episodes
+forge inspect /path/to/dataset --samples 10
 ```
 
 **Output includes:**
@@ -56,13 +65,17 @@ forge convert input/ output/ --config config.yaml
 
 # Dry run (preview without writing)
 forge convert input/ output/ --format lerobot-v3 --dry-run
+
+# Open visualizer after conversion to compare
+forge convert input/ output/ --format lerobot-v3 --visualize
+
+# Specify source format (if auto-detection fails)
+forge convert input/ output/ --format lerobot-v3 --source-format hdf5
 ```
 
 **Target formats:**
 - `lerobot-v3` - LeRobot v3 (recommended for HuggingFace)
-- `lerobot-v2` - LeRobot v2
 - `rlds` - RLDS/TensorFlow Datasets
-- `zarr` - Zarr format
 
 ---
 
@@ -82,10 +95,9 @@ forge visualize /path/to/dataset --episode 5
 ```
 
 **Viewer controls:**
-- Arrow keys: Navigate frames
-- Page Up/Down: Navigate episodes
-- Space: Play/pause
-- Q: Quit
+- Episode slider: Navigate between episodes
+- Frame slider: Navigate frames within an episode
+- Play/Pause button: Auto-play frames
 
 ---
 
@@ -168,9 +180,6 @@ forge hub --author berkeley-humanoid
 
 # Download a dataset
 forge hub --download lerobot/pusht
-
-# Download to specific location
-forge hub --download lerobot/pusht --output ./datasets/
 ```
 
 Downloaded datasets are cached in `~/.cache/forge/datasets/`.
@@ -195,20 +204,6 @@ Show version information.
 
 ```bash
 forge version
-```
-
----
-
-## Global Options
-
-These options work with all commands:
-
-```bash
-# Verbose output
-forge --verbose inspect /path/to/dataset
-
-# Quiet mode (errors only)
-forge --quiet convert input/ output/ --format lerobot-v3
 ```
 
 ---
