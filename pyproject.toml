@@ -52,11 +52,18 @@ rosbag = [
 hdf5 = [
     "h5py>=3.8.0",
 ]
+robodm = [
+    "robodm>=0.1.0",
+]
 video = [
     "av>=11.0.0",
 ]
+visualize = [
+    "opencv-python>=4.8.0",
+    "matplotlib>=3.7.0",
+]
 all = [
-    "forge-robotics[rlds,lerobot,zarr,rosbag,hdf5,video,hub]",
+    "forge-robotics[rlds,lerobot,zarr,rosbag,hdf5,robodm,video,hub,visualize]",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -101,6 +108,8 @@ module = [
     "av.*",
     "yaml.*",
     "h5py.*",
+    "robodm.*",
+    "cv2.*",
 ]
 ignore_missing_imports = true
 

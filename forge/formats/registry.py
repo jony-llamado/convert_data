@@ -118,6 +118,7 @@ class FormatRegistry:
     _detection_priority: list[str] = [
         "lerobot-v3",  # Check v3 before v2 (more specific)
         "lerobot-v2",
+        "robodm",  # .vla files are distinctive
         "rlds",
         "zarr",
         "hdf5",

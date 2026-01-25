@@ -76,6 +76,7 @@ forge convert input/ output/ --format lerobot-v3 --source-format hdf5
 **Target formats:**
 - `lerobot-v3` - LeRobot v3 (recommended for HuggingFace)
 - `rlds` - RLDS/TensorFlow Datasets
+- `robodm` - RoboDM .vla format (up to 70x compression)
 
 ---
 
@@ -92,12 +93,26 @@ forge visualize /path/to/original --compare /path/to/converted
 
 # Specify starting episode
 forge visualize /path/to/dataset --episode 5
+
+# Use fast OpenCV backend (better for video playback)
+forge visualize /path/to/dataset --backend opencv
 ```
 
-**Viewer controls:**
+**Backends:**
+- `matplotlib` (default) - Interactive with sliders, slower playback
+- `opencv` - Fast video playback, keyboard controls
+
+**Matplotlib controls:**
 - Episode slider: Navigate between episodes
 - Frame slider: Navigate frames within an episode
 - Play/Pause button: Auto-play frames
+
+**OpenCV controls:**
+- `Space`: Play/Pause
+- `Left/Right` or `A/D`: Previous/Next frame
+- `Up/Down` or `W/S`: Previous/Next episode
+- `+/-`: Increase/Decrease playback speed
+- `Q` or `Escape`: Quit
 
 ---
 
@@ -240,6 +255,16 @@ forge convert ~/.cache/forge/datasets/openvla/droid_100 \
 ```bash
 # LeRobot → RLDS
 forge convert hf://lerobot/pusht ./pusht_rlds --format rlds
+```
+
+### Convert to RoboDM for efficient storage
+
+```bash
+# Any format → RoboDM (up to 70x compression)
+forge convert hf://lerobot/pusht ./pusht_robodm --format robodm
+
+# Visualize with fast OpenCV backend
+forge visualize ./pusht_robodm --backend opencv
 ```
 
 ### Verify conversion quality

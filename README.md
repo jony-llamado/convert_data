@@ -2,13 +2,16 @@
 
 Convert between robotics dataset formats with one command.
 
-| Format | Read | Write | Notes |
-|--------|:----:|:-----:|-------|
-| RLDS | ✓ | ✓ | Open-X, TensorFlow Datasets |
-| LeRobot v2/v3 | ✓ | ✓ | HuggingFace, Parquet + MP4 |
-| Zarr | ✓ | - | Diffusion Policy, UMI |
-| HDF5 | ✓ | - | robomimic, ACT/ALOHA |
-| Rosbag | ✓ | - | ROS1 .bag, ROS2 MCAP |
+| Format | Read | Write | Visualize | Notes |
+|--------|:----:|:-----:|:---------:|-------|
+| RLDS | ✓ | ✓ | ✓ | Open-X, TensorFlow Datasets |
+| LeRobot v2/v3 | ✓ | ✓ | ✓ | HuggingFace, Parquet + MP4 |
+| RoboDM | ✓ | ✓ | ✓ | Berkeley's .vla format, up to 70x compression* |
+| Zarr | ✓ | - | ✓ | Diffusion Policy, UMI |
+| HDF5 | ✓ | - | ✓ | robomimic, ACT/ALOHA |
+| Rosbag | ✓ | - | ✓ | ROS1 .bag, ROS2 MCAP |
+
+*\*RoboDM requires manual installation from GitHub (see below)*
 
 See [docs/model_formats.md](docs/model_formats.md) for which models (Octo, OpenVLA, ACT, Diffusion Policy, etc.) use which format.
 
@@ -30,13 +33,27 @@ Add a reader, get all writers for free. Add a writer, get all readers for free. 
 git clone https://github.com/arpitg1304/forge.git
 cd forge
 pip install -e ".[all]"
+```
 
+### RoboDM Support (Optional)
+
+RoboDM requires manual installation from GitHub (PyPI version has a codec bug):
+
+```bash
+git clone https://github.com/BerkeleyAutomation/robodm.git
+pip install -e robodm
+```
+
+### Usage
+
+```bash
 # See what's in a dataset
 forge inspect /path/to/dataset
 
 # Convert it
 forge convert /path/to/rlds ./output --format lerobot-v3
 forge convert hf://arpitg1304/stack_lego ./stack_lego_rlds --format rlds --workers 4 --visualize
+forge convert hf://lerobot/pusht ./pusht_robodm --format robodm
 ```
 
 Works with HuggingFace Hub too:
@@ -93,7 +110,6 @@ Planned features (contributions welcome!):
 - [ ] **Episode filtering** - Convert only specific episodes (`--episodes 100-200`)
 - [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
 - [ ] **GR00T format** - Write to NVIDIA Isaac GR00T training format
-- [ ] **RoboDM format** - Read/write [Berkeley's .vla format](https://github.com/BerkeleyAutomation/robodm) for up to 70x compression (H.264/H.265/AV1/FFV1 codecs)
 - [ ] **Distributed conversion** - Scale to 100K+ episode datasets across nodes
 - [ ] **Conversion verification** - Automated diff between source and converted data
 

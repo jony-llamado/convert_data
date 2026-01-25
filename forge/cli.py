@@ -710,6 +710,9 @@ def visualize_cmd(
         None, "--compare", "-c", help="Second dataset for side-by-side comparison"
     ),
     episode: int = typer.Option(0, "--episode", "-e", help="Starting episode index"),
+    backend: str = typer.Option(
+        "matplotlib", "--backend", "-b", help="Viewer backend: matplotlib (interactive) or opencv (fast playback)"
+    ),
 ) -> None:
     """Visualize a dataset interactively.
 
@@ -717,12 +720,16 @@ def visualize_cmd(
     Use --compare to show two datasets side-by-side for comparison.
     Supports HuggingFace Hub URLs (hf://org/repo).
 
+    Backends:
+        matplotlib: Interactive with sliders (default). Slower playback.
+        opencv: Fast playback with keyboard controls. No comparison mode.
+
     Examples:
         forge visualize dataset.zarr
         forge visualize converted_lerobot_v3
         forge visualize hf://lerobot/pusht
         forge visualize original/ --compare converted/
-        forge visualize rlds_dataset/ --compare lerobot_output/
+        forge visualize dataset/ --backend opencv
     """
     from forge.core.exceptions import ForgeError
     from forge.hub import is_hf_url
@@ -756,22 +763,39 @@ def visualize_cmd(
                 raise typer.Exit(1)
 
     try:
-        if resolved_compare:
-            console.print(f"[cyan]Opening comparison viewer:[/cyan]")
-            console.print(f"  Left:  {resolved_path}")
-            console.print(f"  Right: {resolved_compare}")
+        # Handle OpenCV backend
+        if backend.lower() == "opencv":
+            if resolved_compare:
+                console.print("[yellow]Warning:[/yellow] Comparison mode not supported with opencv backend")
+
+            console.print(f"[cyan]Opening fast viewer for:[/cyan] {resolved_path}")
+            console.print("[dim]Controls: Space=Play/Pause, Arrows=Navigate, +/-=Speed, Q=Quit[/dim]")
+            console.print()
+
+            from forge.visualize.cv_viewer import CVViewer
+
+            viewer = CVViewer(resolved_path)
+            if episode > 0:
+                viewer.current_episode = min(episode, viewer.backend.get_num_episodes() - 1)
+            viewer.show()
         else:
-            console.print(f"[cyan]Opening viewer for:[/cyan] {resolved_path}")
+            # Default matplotlib backend
+            if resolved_compare:
+                console.print(f"[cyan]Opening comparison viewer:[/cyan]")
+                console.print(f"  Left:  {resolved_path}")
+                console.print(f"  Right: {resolved_compare}")
+            else:
+                console.print(f"[cyan]Opening viewer for:[/cyan] {resolved_path}")
 
-        console.print("[dim]Controls: Episode/Frame sliders, Play/Pause button[/dim]")
-        console.print()
+            console.print("[dim]Controls: Episode/Frame sliders, Play/Pause button[/dim]")
+            console.print()
 
-        from forge.visualize import UnifiedViewer
+            from forge.visualize import UnifiedViewer
 
-        viewer = UnifiedViewer(resolved_path, resolved_compare)
-        if episode > 0:
-            viewer.current_episode = min(episode, viewer.backends[0].get_num_episodes() - 1)
-        viewer.show()
+            viewer = UnifiedViewer(resolved_path, resolved_compare)
+            if episode > 0:
+                viewer.current_episode = min(episode, viewer.backends[0].get_num_episodes() - 1)
+            viewer.show()
 
     except ForgeError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -1264,9 +1288,6 @@ def formats_cmd() -> None:
     """List supported formats."""
     from forge.formats import FormatRegistry
 
-    # Formats that support visualization (any format with a reader works via unified viewer)
-    visualize_formats = {"lerobot-v3", "zarr", "rlds", "hdf5"}
-
     table = Table(title="Supported Formats")
     table.add_column("Format", style="cyan")
     table.add_column("Read", justify="center")
@@ -1276,7 +1297,8 @@ def formats_cmd() -> None:
     for name, caps in FormatRegistry.list_formats().items():
         read = "[green]✓[/green]" if caps["can_read"] else "[dim]-[/dim]"
         write = "[green]✓[/green]" if caps["can_write"] else "[dim]-[/dim]"
-        viz = "[green]✓[/green]" if name in visualize_formats else "[dim]-[/dim]"
+        # Any format with a reader can be visualized
+        viz = "[green]✓[/green]" if caps["can_read"] else "[dim]-[/dim]"
         table.add_row(name, read, write, viz)
 
     console.print()
