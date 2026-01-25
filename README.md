@@ -93,6 +93,7 @@ Planned features (contributions welcome!):
 - [ ] **Episode filtering** - Convert only specific episodes (`--episodes 100-200`)
 - [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
 - [ ] **GR00T format** - Write to NVIDIA Isaac GR00T training format
+- [ ] **RoboDM format** - Read/write [Berkeley's .vla format](https://github.com/BerkeleyAutomation/robodm) for up to 70x compression (H.264/H.265/AV1/FFV1 codecs)
 - [ ] **Distributed conversion** - Scale to 100K+ episode datasets across nodes
 - [ ] **Conversion verification** - Automated diff between source and converted data
 
