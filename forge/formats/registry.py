@@ -116,6 +116,7 @@ class FormatRegistry:
 
     # Priority order for format detection (more specific formats first)
     _detection_priority: list[str] = [
+        "groot",  # Check GR00T before LeRobot (more specific)
         "lerobot-v3",  # Check v3 before v2 (more specific)
         "lerobot-v2",
         "robodm",  # .vla files are distinctive

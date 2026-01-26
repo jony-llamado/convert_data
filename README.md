@@ -6,6 +6,7 @@ Convert between robotics dataset formats with one command.
 |--------|:----:|:-----:|:---------:|-------|
 | RLDS | ✓ | ✓ | ✓ | Open-X, TensorFlow Datasets |
 | LeRobot v2/v3 | ✓ | ✓ | ✓ | HuggingFace, Parquet + MP4 |
+| GR00T | ✓ | - | ✓ | NVIDIA Isaac, LeRobot v2 with embodiment metadata |
 | RoboDM | ✓ | ✓ | ✓ | Berkeley's .vla format, up to 70x compression* |
 | Zarr | ✓ | - | ✓ | Diffusion Policy, UMI |
 | HDF5 | ✓ | - | ✓ | robomimic, ACT/ALOHA |
@@ -109,7 +110,7 @@ Planned features (contributions welcome!):
 - [ ] **Streaming reads** - Process HuggingFace datasets without full download
 - [ ] **Episode filtering** - Convert only specific episodes (`--episodes 100-200`)
 - [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
-- [ ] **GR00T format** - Write to NVIDIA Isaac GR00T training format
+- [ ] **GR00T writer** - Write to NVIDIA Isaac GR00T training format (read support complete)
 - [ ] **Distributed conversion** - Scale to 100K+ episode datasets across nodes
 - [ ] **Conversion verification** - Automated diff between source and converted data
 
