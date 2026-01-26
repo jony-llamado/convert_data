@@ -13,7 +13,7 @@ Convert between robotics dataset formats with one command.
 
 *\*RoboDM requires manual installation from GitHub (see below)*
 
-See [docs/model_formats.md](docs/model_formats.md) for which models (Octo, OpenVLA, ACT, Diffusion Policy, etc.) use which format.
+See [docs/model_formats.md](docs/model_formats.md) for which models (Octo, OpenVLA, ACT, Diffusion Policy, etc.) use which format. See [docs/format_reference.md](docs/format_reference.md) for detailed format specifications.
 
 ## Why Forge?
 
