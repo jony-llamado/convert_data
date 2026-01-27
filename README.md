@@ -121,6 +121,8 @@ See [docs/configuration.md](docs/configuration.md) for details.
 
 Planned features (contributions welcome!):
 
+- [ ] **Dataset merging** - Combine multiple datasets into one (`forge merge ds1/ ds2/ --output combined/`)
+- [ ] **Train/val/test splitting** - Split datasets with stratification (`--split 80/10/10`)
 - [ ] **Streaming reads** - Process HuggingFace datasets without full download
 - [ ] **Episode filtering** - Convert only specific episodes (`--episodes 100-200`)
 - [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
