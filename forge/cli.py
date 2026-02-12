@@ -811,6 +811,9 @@ def stats_cmd(
     plot: bool = typer.Option(False, "--plot", "-p", help="Show distribution plots"),
     output: Path | None = typer.Option(None, "--output", "-o", help="Save stats to JSON file"),
     sample: int = typer.Option(0, "--sample", "-s", help="Sample N episodes (0 = all)"),
+    quality: bool = typer.Option(False, "--quality", "-q", help="Include quality metrics"),
+    gripper_dim: int = typer.Option(-1, "--gripper-dim", help="Gripper action dimension index"),
+    fps: float = typer.Option(30.0, "--fps", help="Recording FPS (fallback if no timestamps)"),
 ) -> None:
     """Compute and display dataset statistics.
 
@@ -821,6 +824,7 @@ def stats_cmd(
         forge stats dataset/ --plot
         forge stats hf://lerobot/aloha_sim_cube --sample 100
         forge stats dataset/ --output stats.json
+        forge stats dataset/ --quality
     """
     import numpy as np
 
@@ -1009,6 +1013,34 @@ def stats_cmd(
         with open(output, "w") as f:
             json.dump(stats_dict, f, indent=2)
         console.print(f"[green]Stats saved to:[/green] {output}")
+
+    # Quality metrics if requested
+    if quality:
+        from forge.quality import QualityAnalyzer, QualityConfig
+
+        qconfig = QualityConfig(gripper_dim=gripper_dim, fps=fps)
+        analyzer = QualityAnalyzer(config=qconfig)
+
+        console.print("[bold]Quality Metrics[/bold]")
+        console.print()
+
+        report = analyzer.analyze_dataset(resolved_path, sample=sample)
+
+        console.print(f"  Overall Quality Score: [bold]{report.overall_score:.1f}[/bold] / 10")
+        console.print()
+
+        for key, val in report.subscores.items():
+            bar_len = int(val * 10)
+            bar = "[green]" + "█" * bar_len + "[/green]" + "[dim]░[/dim]" * (10 - bar_len)
+            label = key.replace("_", " ").title()
+            console.print(f"  {label:<24s} {bar}  {val:.2f}")
+
+        if report.flags:
+            console.print()
+            for flag in report.flags:
+                console.print(f"  [yellow]⚠[/yellow] {flag}")
+
+        console.print()
 
     # Plot if requested
     if plot:
@@ -1426,6 +1458,227 @@ def hub_cmd(
     console.print()
     console.print("[dim]To download a dataset:[/dim]")
     console.print("  forge hub --download <repo_id>")
+
+
+@app.command("quality")
+def quality_cmd(
+    path: str = typer.Argument(..., help="Path to dataset (local or hf://org/repo)"),
+    gripper_dim: int = typer.Option(-1, "--gripper-dim", "-g", help="Gripper dimension index (-1 = last)"),
+    fps: float = typer.Option(30.0, "--fps", "-f", help="Fallback FPS if timestamps unavailable"),
+    sample: int = typer.Option(0, "--sample", "-s", help="Analyze N episodes (0 = all)"),
+    export: Path | None = typer.Option(None, "--export", "-e", help="Export full report to JSON"),
+    export_flagged: Path | None = typer.Option(None, "--export-flagged", help="Export flagged episode IDs to JSON"),
+    quick: bool = typer.Option(False, "--quick", "-q", help="Quick mode (sample 50 episodes)"),
+    action_bounds: str | None = typer.Option(None, "--action-bounds", help="Known action bounds as 'min,max' (e.g., '-1,1')"),
+) -> None:
+    """Compute quality metrics on dataset episodes.
+
+    Analyzes proprioception data (actions, states, timestamps) to score episode
+    quality. No video processing — pure numpy number crunching.
+
+    Metrics: smoothness (LDLJ), dead actions, gripper chatter, static detection,
+    timestamp regularity, action saturation, action diversity.
+
+    Examples:
+        forge quality ./dataset
+        forge quality ./dataset --gripper-dim 6 --fps 30
+        forge quality ./dataset --export quality_report.json
+        forge quality ./dataset --quick
+        forge quality hf://lerobot/aloha_sim_cube --sample 100
+    """
+    from rich.panel import Panel
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
+
+    from forge.core.exceptions import ForgeError
+    from forge.formats.registry import FormatRegistry
+    from forge.quality import QualityAnalyzer, QualityConfig
+
+    # Parse action bounds
+    bounds = None
+    if action_bounds:
+        try:
+            parts = action_bounds.split(",")
+            bounds = (float(parts[0]), float(parts[1]))
+        except (ValueError, IndexError):
+            console.print("[red]Error:[/red] --action-bounds must be 'min,max' (e.g., '-1,1')")
+            raise typer.Exit(1)
+
+    config = QualityConfig(
+        gripper_dim=gripper_dim,
+        fps=fps,
+        action_bounds=bounds,
+    )
+
+    if quick and sample == 0:
+        sample = 50
+
+    # Resolve path
+    resolved_path = _resolve_dataset_path(path)
+
+    if not resolved_path.exists():
+        console.print(f"[red]Error:[/red] Dataset not found: {resolved_path}")
+        raise typer.Exit(1)
+
+    # Detect format
+    try:
+        format_name = FormatRegistry.detect_format(resolved_path)
+        reader = FormatRegistry.get_reader(format_name)
+    except ForgeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    console.print(f"[cyan]Quality analysis:[/cyan] {path}")
+    console.print(f"[dim]Format: {format_name}[/dim]")
+    console.print()
+
+    # Analyze with progress bar
+    analyzer = QualityAnalyzer(config=config)
+    from collections import defaultdict
+
+    from forge.quality.models import QualityReport
+
+    report = QualityReport(dataset_path=str(path))
+    flagged: dict[str, list[str]] = defaultdict(list)
+
+    try:
+        with Progress(
+            TextColumn("[bold green]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Analyzing episodes...", total=sample or None)
+
+            for i, episode in enumerate(reader.read_episodes(resolved_path)):
+                if sample > 0 and i >= sample:
+                    break
+
+                eq = analyzer.analyze_episode(episode)
+                report.per_episode.append(eq)
+
+                for flag in eq.flags:
+                    flagged[flag].append(eq.episode_id)
+
+                progress.advance(task)
+
+            if sample == 0:
+                progress.update(task, total=len(report.per_episode), completed=len(report.per_episode))
+
+    except ForgeError as e:
+        console.print(f"[red]Error reading dataset:[/red] {e}")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted — showing partial results[/yellow]")
+
+    report.num_episodes = len(report.per_episode)
+    report.flagged_episodes = dict(flagged)
+
+    if report.num_episodes == 0:
+        console.print("[yellow]No episodes analyzed.[/yellow]")
+        raise typer.Exit(0)
+
+    # Aggregate scores
+    import numpy as np
+
+    scores = [eq.overall_score for eq in report.per_episode if eq.overall_score is not None]
+    report.overall_score = float(np.mean(scores)) if scores else 0.0
+
+    all_keys: set[str] = set()
+    for eq in report.per_episode:
+        all_keys.update(eq.subscores.keys())
+
+    for key in all_keys:
+        vals = [eq.subscores[key] for eq in report.per_episode if key in eq.subscores]
+        if vals:
+            report.subscores[key] = float(np.mean(vals))
+
+    # Generate recommendations
+    from forge.quality.analyzer import _generate_recommendations
+
+    report.flags, report.recommendations = _generate_recommendations(report, config)
+
+    # ── Display results ──
+    console.print()
+
+    # Overall score with color
+    score = report.overall_score
+    if score >= 8.0:
+        score_color = "green"
+    elif score >= 6.0:
+        score_color = "yellow"
+    else:
+        score_color = "red"
+
+    # Build the quality report panel
+    lines: list[str] = []
+    lines.append(f"Overall Quality Score: [{score_color}]{score:.1f} / 10[/{score_color}]")
+    lines.append("")
+
+    # Subscores with bar visualization
+    subscore_labels = {
+        "smoothness": "Smoothness (LDLJ)",
+        "dead_actions": "Dead Actions",
+        "gripper_health": "Gripper Health",
+        "static_detection": "Static Detection",
+        "timestamp_regularity": "Timestamp Regularity",
+        "action_saturation": "Action Saturation",
+        "action_diversity": "Action Diversity",
+    }
+
+    for key, label in subscore_labels.items():
+        if key in report.subscores:
+            val = report.subscores[key]
+            filled = int(val * 10)
+            bar = "[green]" + "\u2588" * filled + "[/green]" + "[dim]" + "\u2591" * (10 - filled) + "[/dim]"
+
+            # Count flagged episodes for this metric
+            flag_map = {
+                "smoothness": "jerky",
+                "dead_actions": "dead_actions",
+                "gripper_health": "gripper_chatter",
+                "static_detection": "mostly_static",
+                "timestamp_regularity": "timestamp_jitter",
+                "action_saturation": "saturated",
+                "action_diversity": "low_entropy",
+            }
+            flag_key = flag_map.get(key, "")
+            flagged_count = len(report.flagged_episodes.get(flag_key, []))
+
+            flag_str = f"  {flagged_count} flagged" if flagged_count > 0 else "  OK"
+            lines.append(f"{label:<24} {bar}  {val:.2f}{flag_str}")
+
+    # Top issues
+    if report.flags:
+        lines.append("")
+        lines.append("[bold]Top Issues:[/bold]")
+        for flag in report.flags[:5]:
+            lines.append(f"  [yellow]\u26a0[/yellow] {flag}")
+
+    # Recommendations
+    if report.recommendations:
+        lines.append("")
+        lines.append("[bold]Recommendations:[/bold]")
+        for rec in report.recommendations[:4]:
+            lines.append(f"  [cyan]\u2192[/cyan] {rec}")
+
+    panel_text = "\n".join(lines)
+    panel = Panel(
+        panel_text,
+        title=f"Quality Report: {path}    ({report.num_episodes} episodes)",
+        border_style="blue",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+    # JSON export
+    if export:
+        report.to_json(export)
+        console.print(f"\n[green]Report saved to:[/green] {export}")
+
+    if export_flagged:
+        with open(export_flagged, "w") as f:
+            json.dump(report.flagged_episodes, f, indent=2)
+        console.print(f"[green]Flagged episodes saved to:[/green] {export_flagged}")
 
 
 @app.command("version")

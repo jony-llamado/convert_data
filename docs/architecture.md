@@ -27,6 +27,7 @@ flowchart LR
         Out[LeRobot v3]
         Viz[Visualizer]
         Inspect[Inspector]
+        Quality[Quality Analyzer]
     end
 
     RLDS --> Reader
@@ -40,6 +41,7 @@ flowchart LR
     Episode --> Writer
     Episode --> Viz
     Episode --> Inspect
+    Episode --> Quality
 
     Writer --> Out
 ```
@@ -115,6 +117,7 @@ flowchart TD
         Inspect[forge inspect]
         Convert[forge convert]
         Visualize[forge visualize]
+        QualityCmd[forge quality]
         Hub[forge hub]
     end
 
@@ -133,6 +136,7 @@ flowchart TD
     Inspect --> Registry
     Convert --> Registry
     Visualize --> Registry
+    QualityCmd --> Registry
 
     Hub --> HF
     HF --> Cache
@@ -194,6 +198,11 @@ forge/
 │   └── converter.py       # Conversion orchestration
 ├── inspect/
 │   └── inspector.py       # Dataset inspection
+├── quality/
+│   ├── config.py          # QualityConfig (thresholds, weights)
+│   ├── metrics.py         # Individual metric functions
+│   ├── analyzer.py        # QualityAnalyzer orchestrator
+│   └── models.py          # EpisodeQuality, QualityReport
 └── visualize/
     └── unified_viewer.py  # Format-agnostic viewer
 ```

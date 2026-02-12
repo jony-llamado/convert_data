@@ -95,6 +95,28 @@ forge.convert(
 )
 ```
 
+## Quality Metrics
+
+Automated episode-level quality scoring from proprioception data alone — no video processing needed.
+
+```bash
+forge quality ./my_dataset
+forge quality hf://lerobot/aloha_sim_cube --export report.json
+```
+
+Scores each episode 0-10 based on 8 research-backed metrics:
+
+- **Smoothness (LDLJ)** — jerk-based smoothness from motor control literature (Hogan & Sternad, 2009)
+- **Dead actions** — zero/constant action detection (Kim et al. "OpenVLA", 2024)
+- **Gripper chatter** — rapid open/close transitions (Sakr et al., 2024)
+- **Static detection** — idle periods where the robot isn't moving (Liu et al. "SCIZOR", 2025)
+- **Timestamp regularity** — dropped frames and frequency jitter
+- **Action saturation** — time spent at hardware limits
+- **Action entropy** — diversity vs repetitiveness (Belkhale et al. "DemInf", 2025)
+- **Path length** — wandering/hesitation in joint space
+
+See [forge/quality/README.md](forge/quality/README.md) for full metric details, paper references, and how to add new metrics.
+
 ## CLI Reference
 
 See [docs/cli.md](docs/cli.md) for the full command reference including:
@@ -102,6 +124,7 @@ See [docs/cli.md](docs/cli.md) for the full command reference including:
 - `forge inspect` - Dataset inspection and schema analysis
 - `forge convert` - Format conversion with camera mapping
 - `forge visualize` - Interactive dataset viewer
+- `forge quality` - Episode-level quality scoring ([details](forge/quality/README.md))
 - `forge stats` - Compute dataset statistics
 - `forge export-video` - Extract camera videos as MP4
 - `forge hub` - Search and download from HuggingFace
@@ -124,7 +147,7 @@ Planned features (contributions welcome!):
 - [ ] **Dataset merging** - Combine multiple datasets into one (`forge merge ds1/ ds2/ --output combined/`)
 - [ ] **Train/val/test splitting** - Split datasets with stratification (`--split 80/10/10`)
 - [ ] **Streaming reads** - Process HuggingFace datasets without full download
-- [ ] **Episode filtering** - Convert only specific episodes (`--episodes 100-200`)
+- [ ] **Episode filtering** - Filter by quality score, flags, or episode IDs (`forge filter --min-quality 6.0`)
 - [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
 - [ ] **GR00T writer** - Write to NVIDIA Isaac GR00T training format (read support complete)
 - [ ] **Distributed conversion** - Scale to 100K+ episode datasets across nodes
