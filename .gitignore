@@ -85,6 +85,10 @@ conversions/
 PROJECT_PLAN.md
 RESEARCH_DIRECTIONS.md
 INTRO_DRAFTS.md
+CONVERSION_TESTS.md
+
+# Converted dataset outputs
+stack_lego_rlds/
 
 # HuggingFace cache (user-specific)
 # ~/.cache/forge/ is outside repo, but just in case
