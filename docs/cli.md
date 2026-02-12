@@ -116,6 +116,48 @@ forge visualize /path/to/dataset --backend opencv
 
 ---
 
+## forge quality
+
+Episode-level quality scoring using proprioception data (no video processing).
+
+```bash
+# Basic quality report
+forge quality /path/to/dataset
+
+# From HuggingFace Hub
+forge quality hf://lerobot/aloha_sim_cube
+
+# With options
+forge quality /path/to/dataset --gripper-dim 6 --fps 30
+forge quality /path/to/dataset --export report.json
+forge quality /path/to/dataset --export-flagged flagged.json
+
+# Quick mode (skip expensive metrics)
+forge quality /path/to/dataset --quick
+
+# Known action bounds (tighter saturation detection)
+forge quality /path/to/dataset --action-bounds -1.0,1.0
+
+# Sample subset
+forge quality /path/to/dataset --sample 50
+```
+
+**Metrics computed:**
+- Smoothness (LDLJ) — jerk-based smoothness score
+- Dead actions — zero/constant action detection
+- Gripper chatter — rapid open/close transitions
+- Static detection — idle periods
+- Timestamp regularity — dropped frames, jitter
+- Action saturation — time at hardware limits
+- Action entropy — diversity vs repetitiveness
+- Path length — wandering in joint space
+
+**Output:** Overall score (0-10), per-metric subscores, flags, and actionable recommendations.
+
+See [forge/quality/README.md](../forge/quality/README.md) for full metric details and paper references.
+
+---
+
 ## forge stats
 
 Compute dataset statistics.
@@ -132,12 +174,16 @@ forge stats /path/to/dataset --output stats.json
 
 # Sample subset of episodes (faster)
 forge stats /path/to/dataset --sample 100
+
+# Include quality metrics
+forge stats /path/to/dataset --quality
 ```
 
 **Statistics include:**
 - Episode counts (total, min/max/mean frames)
 - Coverage metrics (language, success labels, rewards)
 - Action/state distributions (min, max, mean, std per dimension)
+- Quality metrics (with `--quality` flag)
 
 ---
 
