@@ -7,9 +7,11 @@
 ██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗
 ╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 </pre>
-<b>⚒ Robotics Data Toolkit ⚒</b>
-<br>
+<h2>⚒ Robotics Data Toolkit ⚒</h2>
 <i>Convert, inspect, visualize, and score robotics datasets across every major format.</i>
+<br><br>
+<a href="https://github.com/arpitg1304/forge"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square"></a>
+<a href="https://github.com/arpitg1304/forge/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
 <br><br>
 <code>RLDS ═══╗         ╔═══► LeRobot</code><br>
 <code>Zarr ═══╬════⚙════╬═══► RoboDM</code><br>
