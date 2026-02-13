@@ -7,14 +7,16 @@
 ██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗
 ╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 </pre>
-<b>⚒ Robotics Data Format Converter ⚒</b>
+<b>⚒ Robotics Data Toolkit ⚒</b>
+<br>
+<i>Convert, inspect, visualize, and score robotics datasets across every major format.</i>
 <br><br>
 <code>RLDS ═══╗         ╔═══► LeRobot</code><br>
 <code>Zarr ═══╬════⚙════╬═══► RoboDM</code><br>
 <code>HDF5 ═══╝         ╚═══► RLDS</code>
 </p>
 
-Convert between robotics dataset formats with one command.
+Convert between robotics dataset formats with one command. Score demonstration quality with research-backed metrics.
 
 | Format | Read | Write | Visualize | Notes |
 |--------|:----:|:-----:|:---------:|-------|
