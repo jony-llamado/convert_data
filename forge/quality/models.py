@@ -132,3 +132,41 @@ class QualityReport:
     def to_json(self, path: str | Path) -> None:
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> QualityReport:
+        """Load a QualityReport from a JSON file exported by to_json()."""
+        with open(path) as f:
+            data = json.load(f)
+        return cls.from_dict(data)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> QualityReport:
+        """Reconstruct a QualityReport from a dictionary."""
+        report = cls(
+            dataset_path=data["dataset_path"],
+            num_episodes=data.get("num_episodes", 0),
+            overall_score=data.get("overall_score", 0.0),
+            computed_at=data.get("computed_at", ""),
+        )
+        report.subscores = data.get("subscores", {})
+        report.flags = data.get("flags", [])
+        report.flagged_episodes = data.get("flagged_episodes", {})
+        report.recommendations = data.get("recommendations", [])
+
+        for ep_data in data.get("per_episode", []):
+            eq = EpisodeQuality(
+                episode_id=ep_data["episode_id"],
+                num_frames=ep_data.get("num_frames", 0),
+                overall_score=ep_data.get("overall_score"),
+                dead_fraction=ep_data.get("dead_fraction"),
+                ldlj=ep_data.get("ldlj"),
+                gripper_chatter_rate=ep_data.get("gripper_chatter_rate"),
+                joint_path_length=ep_data.get("joint_path_length"),
+                overall_saturation=ep_data.get("overall_saturation"),
+                mean_entropy=ep_data.get("mean_entropy"),
+                flags=ep_data.get("flags", []),
+            )
+            report.per_episode.append(eq)
+
+        return report

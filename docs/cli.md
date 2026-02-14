@@ -158,6 +158,41 @@ See [forge/quality/README.md](../forge/quality/README.md) for full metric detail
 
 ---
 
+## forge filter
+
+Filter dataset episodes based on quality scores, flags, or episode IDs. Writes the same format — no conversion.
+
+```bash
+# Dry-run: preview what passes/fails
+forge filter /path/to/dataset --min-quality 6.0
+
+# Write filtered dataset
+forge filter /path/to/dataset /path/to/output --min-quality 6.0
+
+# Exclude by flags
+forge filter /path/to/dataset /path/to/output --exclude-flags jerky,mostly_static
+
+# Use pre-computed quality report (faster)
+forge quality /path/to/dataset --export report.json
+forge filter /path/to/dataset /path/to/output --from-report report.json --min-quality 7.0
+
+# Explicit episode lists
+forge filter /path/to/dataset /path/to/output --include-episodes ep_000,ep_001
+forge filter /path/to/dataset /path/to/output --exclude-episodes ep_003,ep_010
+```
+
+**Filter criteria:**
+- `--min-quality` — Keep episodes scoring >= threshold (0-10)
+- `--exclude-flags` — Exclude episodes with matching flags (comma-separated)
+- `--include-episodes` / `--exclude-episodes` — Explicit episode selection
+- `--from-report` — Skip re-analysis, use existing quality report JSON
+
+**Output:** Summary of kept/excluded episodes with reasons. Dry-run if no output path given.
+
+See [forge/filter/README.md](../forge/filter/README.md) for full details.
+
+---
+
 ## forge stats
 
 Compute dataset statistics.
