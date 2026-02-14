@@ -36,6 +36,7 @@ from forge.convert.converter import (
     Converter,
     convert,
 )
+from forge.filter.engine import FilterConfig, FilterEngine, FilterResult
 from forge.core.exceptions import (
     ConversionError,
     ForgeError,
@@ -91,6 +92,10 @@ __all__ = [
     "Converter",
     "ConversionConfig",
     "ConversionResult",
+    # Filter
+    "FilterConfig",
+    "FilterEngine",
+    "FilterResult",
     # Module-level functions
     "inspect",
     "convert",

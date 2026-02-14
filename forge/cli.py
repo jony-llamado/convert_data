@@ -1681,6 +1681,188 @@ def quality_cmd(
         console.print(f"[green]Flagged episodes saved to:[/green] {export_flagged}")
 
 
+@app.command("filter")
+def filter_cmd(
+    source: str = typer.Argument(..., help="Path to dataset (local or hf://org/repo)"),
+    output: Path | None = typer.Argument(None, help="Output path for filtered dataset (omit for dry-run)"),
+    min_quality: float | None = typer.Option(None, "--min-quality", "-q", help="Keep episodes with overall_score >= this value (0-10)"),
+    exclude_flags: str | None = typer.Option(None, "--exclude-flags", help="Exclude episodes with ANY of these flags (comma-separated)"),
+    include_episodes: str | None = typer.Option(None, "--include-episodes", help="Only include these episode IDs (comma-separated)"),
+    exclude_episodes: str | None = typer.Option(None, "--exclude-episodes", help="Exclude these episode IDs (comma-separated)"),
+    from_report: Path | None = typer.Option(None, "--from-report", "-r", help="Use pre-computed quality report JSON"),
+    gripper_dim: int = typer.Option(-1, "--gripper-dim", "-g", help="Gripper dimension index (-1 = last)"),
+    fps: float = typer.Option(30.0, "--fps", "-f", help="Fallback FPS if timestamps unavailable"),
+    action_bounds: str | None = typer.Option(None, "--action-bounds", help="Known action bounds as 'min,max'"),
+) -> None:
+    """Filter dataset episodes based on quality scores and flags.
+
+    Reads a dataset, evaluates each episode against quality criteria, and
+    writes only passing episodes to the output (same format). If no output
+    path is given, runs in dry-run mode and prints a summary.
+
+    Examples:
+        forge filter ./dataset                                    # Dry-run
+        forge filter ./dataset ./filtered --min-quality 6.0
+        forge filter ./dataset ./filtered --exclude-flags jerky,mostly_static
+        forge filter ./dataset ./filtered --from-report report.json --min-quality 7.0
+    """
+    from rich.panel import Panel
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
+
+    from forge.core.exceptions import ForgeError
+    from forge.filter.engine import FilterConfig, FilterEngine
+
+    # Validate mutual exclusivity
+    if include_episodes and exclude_episodes:
+        console.print("[red]Error:[/red] Cannot use both --include-episodes and --exclude-episodes")
+        raise typer.Exit(1)
+
+    # Parse action bounds
+    bounds = None
+    if action_bounds:
+        try:
+            parts = action_bounds.split(",")
+            bounds = (float(parts[0]), float(parts[1]))
+        except (ValueError, IndexError):
+            console.print("[red]Error:[/red] --action-bounds must be 'min,max' (e.g., '-1,1')")
+            raise typer.Exit(1)
+
+    # Parse comma-separated lists
+    flags_list = [f.strip() for f in exclude_flags.split(",")] if exclude_flags else None
+    include_list = [e.strip() for e in include_episodes.split(",")] if include_episodes else None
+    exclude_list = [e.strip() for e in exclude_episodes.split(",")] if exclude_episodes else None
+
+    config = FilterConfig(
+        min_quality=min_quality,
+        exclude_flags=flags_list,
+        include_episodes=include_list,
+        exclude_episodes=exclude_list,
+        from_report=from_report,
+        gripper_dim=gripper_dim,
+        fps=fps,
+        action_bounds=bounds,
+    )
+
+    # Resolve source
+    resolved_path = _resolve_dataset_path(source)
+    if not resolved_path.exists():
+        console.print(f"[red]Error:[/red] Dataset not found: {resolved_path}")
+        raise typer.Exit(1)
+
+    # Show mode
+    dry_run = output is None
+    if dry_run:
+        console.print(f"[cyan]Filter dry-run:[/cyan] {source}")
+    else:
+        console.print(f"[cyan]Filtering:[/cyan] {source} [dim]→[/dim] {output}")
+
+    # Build criteria string
+    criteria: list[str] = []
+    if min_quality is not None:
+        criteria.append(f"min_quality={min_quality}")
+    if flags_list:
+        criteria.append(f"exclude_flags=[{', '.join(flags_list)}]")
+    if include_list:
+        criteria.append(f"include={len(include_list)} episodes")
+    if exclude_list:
+        criteria.append(f"exclude={len(exclude_list)} episodes")
+    if from_report:
+        criteria.append(f"from_report={from_report}")
+
+    if not criteria:
+        console.print("[yellow]Warning:[/yellow] No filter criteria specified — all episodes will pass")
+
+    console.print(f"[dim]Criteria: {', '.join(criteria) if criteria else 'none'}[/dim]")
+    console.print()
+
+    engine = FilterEngine(config)
+
+    try:
+        with Progress(
+            TextColumn("[bold green]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Filtering episodes...", total=None)
+
+            def on_progress(stage: str, current: int, total: int) -> None:
+                if total > 0:
+                    progress.update(task, total=total, completed=current)
+
+            result = engine.filter(
+                source=resolved_path,
+                output=output,
+                progress_callback=on_progress,
+            )
+
+            progress.update(
+                task,
+                total=result.total_episodes or (result.episodes_kept + result.episodes_excluded),
+                completed=result.episodes_kept + result.episodes_excluded,
+            )
+
+    except ForgeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    console.print()
+
+    # Display results
+    if dry_run:
+        # Show table of episodes
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Episode", style="dim")
+        table.add_column("Score", justify="right")
+        table.add_column("Flags")
+        table.add_column("Status")
+
+        # We need quality data for the table — re-derive from result
+        for ep_id in result.kept_ids:
+            table.add_row(ep_id, "", "", "[green]KEEP[/green]")
+        for ep_id in result.excluded_ids:
+            reasons = result.exclusion_reasons.get(ep_id, [])
+            table.add_row(ep_id, "", "", f"[red]EXCLUDE[/red] ({'; '.join(reasons)})")
+
+        console.print(table)
+        console.print()
+
+    # Summary
+    total = result.episodes_kept + result.episodes_excluded
+    kept_color = "green" if result.episodes_kept > 0 else "yellow"
+    excl_color = "red" if result.episodes_excluded > 0 else "dim"
+
+    lines: list[str] = []
+    lines.append(f"Episodes kept: [{kept_color}]{result.episodes_kept}[/{kept_color}] / {total}")
+    lines.append(f"Episodes excluded: [{excl_color}]{result.episodes_excluded}[/{excl_color}]")
+
+    if not dry_run and result.output_path:
+        lines.append(f"Total frames: {result.total_frames_kept:,}")
+        lines.append(f"Output: [bold]{result.output_path}[/bold]")
+
+    if result.errors:
+        lines.append("")
+        for err in result.errors[:5]:
+            lines.append(f"[red]Error:[/red] {err}")
+
+    panel = Panel(
+        "\n".join(lines),
+        title=f"Filter {'Preview' if dry_run else 'Result'}: {result.format}",
+        border_style="blue",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+    if dry_run and output is None and result.episodes_excluded > 0:
+        console.print(
+            f"\n[dim]Run with output path to write filtered dataset:[/dim]"
+            f"\n  forge filter {source} ./filtered"
+            + (f" --min-quality {min_quality}" if min_quality else "")
+            + (f" --exclude-flags {exclude_flags}" if exclude_flags else "")
+            + (f" --from-report {from_report}" if from_report else "")
+        )
+
+
 @app.command("version")
 def version_cmd() -> None:
     """Show Forge version."""

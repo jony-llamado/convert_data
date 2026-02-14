@@ -121,6 +121,19 @@ Scores each episode 0-10 based on 8 research-backed metrics:
 
 See [forge/quality/README.md](forge/quality/README.md) for full metric details, paper references, and how to add new metrics.
 
+## Episode Filtering
+
+Filter datasets by quality score, flags, or episode IDs. Supports dry-run previews and pre-computed quality reports.
+
+```bash
+forge filter ./my_dataset --min-quality 6.0                          # Dry-run preview
+forge filter ./my_dataset ./filtered --min-quality 6.0               # Write filtered dataset
+forge filter ./my_dataset ./filtered --exclude-flags jerky,mostly_static
+forge filter ./my_dataset ./filtered --from-report report.json       # Skip re-analysis
+```
+
+See [forge/filter/README.md](forge/filter/README.md) for full details.
+
 ## CLI Reference
 
 See [docs/cli.md](docs/cli.md) for the full command reference including:
@@ -129,6 +142,7 @@ See [docs/cli.md](docs/cli.md) for the full command reference including:
 - `forge convert` - Format conversion with camera mapping
 - `forge visualize` - Interactive dataset viewer
 - `forge quality` - Episode-level quality scoring ([details](forge/quality/README.md))
+- `forge filter` - Quality-based episode filtering ([details](forge/filter/README.md))
 - `forge stats` - Compute dataset statistics
 - `forge export-video` - Extract camera videos as MP4
 - `forge hub` - Search and download from HuggingFace
@@ -151,7 +165,7 @@ Planned features (contributions welcome!):
 - [ ] **Dataset merging** - Combine multiple datasets into one (`forge merge ds1/ ds2/ --output combined/`)
 - [ ] **Train/val/test splitting** - Split datasets with stratification (`--split 80/10/10`)
 - [ ] **Streaming reads** - Process HuggingFace datasets without full download
-- [ ] **Episode filtering** - Filter by quality score, flags, or episode IDs (`forge filter --min-quality 6.0`)
+- [x] **Episode filtering** - Filter by quality score, flags, or episode IDs (`forge filter --min-quality 6.0`)
 - [ ] **Depth/point cloud support** - Preserve depth streams from RLDS/Open-X
 - [ ] **GR00T writer** - Write to NVIDIA Isaac GR00T training format (read support complete)
 - [ ] **Distributed conversion** - Scale to 100K+ episode datasets across nodes

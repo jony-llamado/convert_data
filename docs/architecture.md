@@ -118,6 +118,7 @@ flowchart TD
         Convert[forge convert]
         Visualize[forge visualize]
         QualityCmd[forge quality]
+        FilterCmd[forge filter]
         Hub[forge hub]
     end
 
@@ -137,6 +138,7 @@ flowchart TD
     Convert --> Registry
     Visualize --> Registry
     QualityCmd --> Registry
+    FilterCmd --> Registry
 
     Hub --> HF
     HF --> Cache
@@ -178,7 +180,7 @@ sequenceDiagram
 
 ```
 forge/
-├── cli.py                 # CLI commands (inspect, convert, visualize, hub)
+├── cli.py                 # CLI commands (inspect, convert, visualize, quality, filter, hub)
 ├── core/
 │   ├── models.py          # Episode, Frame, LazyImage
 │   ├── protocols.py       # FormatReader, FormatWriter interfaces
@@ -203,6 +205,8 @@ forge/
 │   ├── metrics.py         # Individual metric functions
 │   ├── analyzer.py        # QualityAnalyzer orchestrator
 │   └── models.py          # EpisodeQuality, QualityReport
+├── filter/
+│   └── engine.py          # FilterEngine, FilterConfig, FilterResult
 └── visualize/
     └── unified_viewer.py  # Format-agnostic viewer
 ```
