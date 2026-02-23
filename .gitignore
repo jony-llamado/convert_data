@@ -93,3 +93,8 @@ stack_lego_rlds/
 # HuggingFace cache (user-specific)
 # ~/.cache/forge/ is outside repo, but just in case
 .cache/
+
+sample_lerobot_data
+sample_output_rosbag
+sample_rlds_data
+rlds_data

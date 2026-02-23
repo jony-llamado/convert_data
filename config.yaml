@@ -1,0 +1,24 @@
+# Forge conversion configuration
+# Generated from: /home/mailroom/dev_ws/sample_bag/2-23-2026-15-51-27-752bf3ac-108c-11f1-adcf-345a6051fb25
+# Source format: rosbag
+
+# Target format for conversion
+target_format: lerobot-v3
+
+fps: 10.2
+# robot_type: franka  # Specify robot type
+
+# Camera name mapping (source → target)
+# Modify target names as needed for your use case
+cameras:
+  camera_ocr: camera_ocr
+  camera_od: camera_od
+
+# Video encoding settings (optional)
+# video:
+#   codec: h264
+#   crf: 23  # Quality (lower = better, 18-28 typical)
+
+# Behavior settings
+fail_on_error: false
+skip_existing: true

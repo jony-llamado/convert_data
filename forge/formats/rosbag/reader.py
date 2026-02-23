@@ -481,9 +481,11 @@ class RosbagReader:
 
             # Use first image topic as reference for frame timing
             ref_conn = image_connections[0]
+            for conn in image_connections:
+                print(f"id={conn.id} topic={conn.topic} msgcount={conn.msgcount}")
 
             frame_idx = 0
-            for connection, timestamp, rawdata in reader.messages(connections=[ref_conn]):
+            for connection, timestamp, rawdata in reader.messages(connections=image_connections):
                 msg = reader.deserialize(rawdata, connection.msgtype)
 
                 # Create lazy image loader
