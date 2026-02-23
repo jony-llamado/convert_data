@@ -98,3 +98,4 @@ sample_lerobot_data
 sample_output_rosbag
 sample_rlds_data
 rlds_data
+.env
